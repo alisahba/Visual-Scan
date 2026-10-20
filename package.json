@@ -1,0 +1,20 @@
+{
+  "name": "visual-scan",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Slit-scan visualiser: an image is scanned by the music onto an evolving canvas.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vite": "^8.3.4"
+  },
+  "dependencies": {
+    "@fontsource-variable/inter-tight": "^5.3.0"
+  }
+}

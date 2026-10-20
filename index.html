@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Visual Scan</title>
+    <meta name="description" content="A slit-scan visualiser. Music scans an image onto an evolving canvas." />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%230d0d0d'/%3E%3Crect x='15' width='3' height='32' fill='%23ff4a1c'/%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <div class="app" id="app">
+      <header class="top">
+        <div class="brand">
+          <span class="logo" aria-hidden="true"></span>
+          <strong>Visual Scan</strong>
+          <span class="sub">Slit-scan visualiser</span>
+        </div>
+        <div class="meta">
+          <span id="m-res">—</span>
+          <span id="m-fps">— fps</span>
+        </div>
+        <div class="actions">
+          <button class="btn ghost" id="b-theme" type="button">Dark</button>
+          <button class="btn ghost" id="b-perform" type="button">Perform <kbd>F</kbd></button>
+        </div>
+      </header>
+
+      <aside class="panel" id="panel">
+        <!-- 01 Source -->
+        <section class="sec">
+          <header class="sec-h"><span class="n">01</span><h2>Source</h2><span class="sec-s" id="src-name">Nothing loaded</span></header>
+          <div class="seg" id="seg-source">
+            <button type="button" data-v="image" class="on">Image</button>
+            <button type="button" data-v="video">Video</button>
+            <button type="button" data-v="camera">Camera</button>
+          </div>
+          <div class="preview" id="preview">
+            <canvas id="src-canvas"></canvas>
+            <button type="button" class="drop" id="src-drop">
+              <span id="src-drop-t">Drop an image</span>
+              <small>or click to choose</small>
+            </button>
+          </div>
+          <div class="note-row">
+            <p class="note" id="src-note">Drag across the image to steer the slit.</p>
+            <button type="button" class="link" id="b-src-replace" hidden>Replace</button>
+          </div>
+          <input type="file" id="f-image" accept="image/*" hidden />
+          <input type="file" id="f-video" accept="video/*" hidden />
+        </section>
+
+        <!-- 02 Sound -->
+        <section class="sec">
+          <header class="sec-h"><span class="n">02</span><h2>Sound</h2><span class="sec-s" id="snd-name">Nothing loaded</span></header>
+          <div class="seg" id="seg-audio">
+            <button type="button" data-v="track" class="on">Track</button>
+            <button type="button" data-v="input">Live input</button>
+          </div>
+          <div id="snd-track">
+            <button type="button" class="file" id="b-track">
+              <span id="b-track-t">Choose a track</span><small>MP3, WAV, AAC, FLAC</small>
+            </button>
+          </div>
+          <div id="snd-input" hidden>
+            <div class="field">
+              <span class="lbl">Device</span>
+              <select id="sel-input"><option value="">Default input</option></select>
+            </div>
+          </div>
+          <canvas id="meter" class="meter" aria-hidden="true"></canvas>
+          <div class="bands">
+            <span>Low <b id="v-low">00</b></span>
+            <span>Mid <b id="v-mid">00</b></span>
+            <span>High <b id="v-high">00</b></span>
+            <span class="hit" id="v-hit">Hit</span>
+          </div>
+          <div id="gain-row"></div>
+          <input type="file" id="f-track" accept="audio/*" hidden />
+        </section>
+
+        <!-- 03 Scan -->
+        <section class="sec">
+          <header class="sec-h"><span class="n">03</span><h2>Scan</h2><button type="button" class="link" id="b-reset">Reset</button></header>
+          <div class="field">
+            <span class="lbl">Axis</span>
+            <div class="seg" id="seg-axis">
+              <button type="button" data-v="horizontal">Across</button>
+              <button type="button" data-v="vertical">Down</button>
+              <button type="button" data-v="radial">Orbit</button>
+            </div>
+          </div>
+          <div class="field">
+            <span class="lbl">Preset</span>
+            <div class="seg" id="seg-preset"></div>
+          </div>
+          <div id="loop-row"></div>
+          <div class="sliders" id="sliders"></div>
+        </section>
+
+        <!-- 04 Output -->
+        <section class="sec">
+          <header class="sec-h"><span class="n">04</span><h2>Output</h2><span class="sec-s" id="out-size">—</span></header>
+          <div class="field">
+            <span class="lbl">Format</span>
+            <div class="seg small" id="seg-format">
+              <button type="button" data-v="source">Src</button>
+              <button type="button" data-v="16:9">16:9</button>
+              <button type="button" data-v="1:1">1:1</button>
+              <button type="button" data-v="4:5">4:5</button>
+              <button type="button" data-v="9:16">9:16</button>
+            </div>
+          </div>
+          <div class="field">
+            <span class="lbl">Size</span>
+            <div class="seg" id="seg-size">
+              <button type="button" data-v="hd">HD</button>
+              <button type="button" data-v="4k">4K</button>
+            </div>
+          </div>
+          <div class="field">
+            <span class="lbl">Colour</span>
+            <div class="seg" id="seg-colour">
+              <button type="button" data-v="source">Source</button>
+              <button type="button" data-v="mono">Mono</button>
+              <button type="button" data-v="duo">Duo</button>
+            </div>
+          </div>
+          <div class="field" id="duo-row">
+            <span class="lbl">Pair</span>
+            <div class="swatches" id="swatches"></div>
+          </div>
+          <div class="field">
+            <span class="lbl">Show</span>
+            <div class="toggles">
+              <label class="tog"><input type="checkbox" id="t-head" /><span>Head</span></label>
+              <label class="tog"><input type="checkbox" id="t-grid" /><span>Grid</span></label>
+            </div>
+          </div>
+          <div class="btns">
+            <button type="button" class="btn" id="b-clear">Clear <kbd>C</kbd></button>
+            <button type="button" class="btn" id="b-png">PNG <kbd>S</kbd></button>
+            <button type="button" class="btn rec" id="b-rec"><i class="dot"></i><span id="b-rec-t">Record</span> <kbd>R</kbd></button>
+          </div>
+        </section>
+
+        <footer class="keys">
+          <span><kbd>Space</kbd> Play</span>
+          <span><kbd>C</kbd> Clear</span>
+          <span><kbd>S</kbd> PNG</span>
+          <span><kbd>R</kbd> Record</span>
+          <span><kbd>F</kbd> Perform</span>
+          <span><kbd>1–4</kbd> Presets</span>
+        </footer>
+      </aside>
+
+      <main class="stage" id="stage">
+        <div class="frame" id="frame">
+          <canvas id="gl"></canvas>
+          <canvas id="overlay"></canvas>
+          <div class="empty" id="empty">
+            <ol class="steps">
+              <li id="step-src"><span class="n">01</span>Drop an image</li>
+              <li id="step-snd"><span class="n">02</span>Drop a track</li>
+              <li id="step-go"><span class="n">03</span>Press Space</li>
+            </ol>
+            <div class="empty-cta">
+              <button type="button" class="btn solid" id="b-demo">Load the demo</button>
+              <span class="note">A built-in image and a 60-second synth track.</span>
+            </div>
+          </div>
+          <div class="toast" id="toast" role="status" aria-live="polite"></div>
+        </div>
+      </main>
+
+      <footer class="transport">
+        <button type="button" class="play" id="b-play" aria-label="Play">
+          <svg viewBox="0 0 16 16" class="i-play"><path d="M4 2.5v11l9-5.5z" /></svg>
+          <svg viewBox="0 0 16 16" class="i-pause"><path d="M4 2.5h3v11H4zM9 2.5h3v11H9z" /></svg>
+        </button>
+        <div class="time"><span id="t-cur">00:00.0</span><span class="sep">/</span><span id="t-dur">00:00.0</span></div>
+        <div class="timeline" id="timeline"><canvas id="tl-canvas"></canvas></div>
+        <div class="seg" id="seg-fill">
+          <button type="button" data-v="pass" title="One pass per track: the canvas completes when the song ends">Pass</button>
+          <button type="button" data-v="loop" title="Constant speed, paints over itself on each pass">Loop</button>
+        </div>
+      </footer>
+    </div>
+
+    <div class="dropzone" id="dropzone"><span>Drop to load</span></div>
+    <div class="fatal" id="fatal" hidden></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
