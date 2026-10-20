@@ -1,5 +1,14 @@
 /* Visual Scan — Swiss grid, one typeface, one accent. */
 
+/* Latin subset only, so the self-contained build stays small */
+@font-face {
+  font-family: 'Inter Tight Variable';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url('../node_modules/@fontsource-variable/inter-tight/files/inter-tight-latin-wght-normal.woff2') format('woff2-variations');
+}
+
 :root {
   --paper: #f3f3f0;
   --ink: #0d0d0d;
@@ -87,7 +96,7 @@ kbd {
   display: grid;
   grid-template-columns: var(--panel-w) minmax(0, 1fr);
   grid-template-rows: var(--bar-h) minmax(0, 1fr) var(--tr-h);
-  height: 100dvh;
+  height: 100%;
 }
 
 .top {
@@ -927,7 +936,7 @@ body.perform.idle {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: var(--bar-h) auto var(--tr-h) auto;
     height: auto;
-    min-height: 100dvh;
+    min-height: 100%;
   }
 
   .top {

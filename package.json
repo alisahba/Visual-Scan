@@ -8,7 +8,8 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build:artifact": "tsc --noEmit && vite build --mode artifact && node scripts/artifact.mjs"
   },
   "devDependencies": {
     "typescript": "^5.9.3",

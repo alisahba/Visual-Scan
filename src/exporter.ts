@@ -1,6 +1,32 @@
 // PNG stills and video recording (canvas + audio).
 
-export function download(blob: Blob, filename: string) {
+type Downloads = { save(req: { filename: string; data: Blob }): Promise<unknown> };
+
+/** When hosted on claude.ai, files go through the viewer's save prompt. */
+let hostSave: Promise<Downloads | null> | null = null;
+function getHostSave(): Promise<Downloads | null> {
+  if (!hostSave) {
+    const c = (window as unknown as { claude?: { use?: (n: string) => Promise<Downloads | null> } }).claude;
+    hostSave = c?.use ? c.use('downloads').catch(() => null) : Promise.resolve(null);
+  }
+  return hostSave;
+}
+// Ask early so the first save isn't delayed
+getHostSave();
+
+export type SaveOutcome = 'saved' | 'declined' | 'failed';
+
+export async function download(blob: Blob, filename: string): Promise<SaveOutcome> {
+  const downloads = await getHostSave();
+  if (downloads) {
+    try {
+      await downloads.save({ filename, data: blob });
+      return 'saved';
+    } catch (e) {
+      const code = (e as { code?: string })?.code;
+      return code === 'declined' ? 'declined' : 'failed';
+    }
+  }
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -9,6 +35,7 @@ export function download(blob: Blob, filename: string) {
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 5000);
+  return 'saved';
 }
 
 export function stamp(): string {

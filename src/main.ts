@@ -1,4 +1,3 @@
-import '@fontsource-variable/inter-tight';
 import './style.css';
 
 import { AudioEngine } from './audio';
@@ -298,6 +297,9 @@ const fImage = $<HTMLInputElement>('f-image');
 const fVideo = $<HTMLInputElement>('f-video');
 const fTrack = $<HTMLInputElement>('f-track');
 
+// Hosted inside claude.ai the page is framed, and the frame blocks camera and mic
+const HOSTED = window.self !== window.top;
+
 const sourceSeg = seg($('seg-source'), 'image', (v) => {
   if (v === 'image') fImage.click();
   else if (v === 'video') fVideo.click();
@@ -414,6 +416,13 @@ function showAudioPanel(which: 'track' | 'input') {
 }
 
 const selInput = $<HTMLSelectElement>('sel-input');
+if (HOSTED) {
+  sourceSeg.disable('camera', true);
+  audioSeg.disable('input', true);
+  const why = 'Camera and live input are blocked on the hosted page. Run the app locally to use them.';
+  $('seg-source').querySelector<HTMLElement>('[data-v="camera"]')!.title = why;
+  $('seg-audio').querySelector<HTMLElement>('[data-v="input"]')!.title = why;
+}
 async function startInput(deviceId?: string) {
   try {
     await audio.useMic(deviceId || selInput.value || undefined);
@@ -448,7 +457,7 @@ async function loadDemo() {
   btn.textContent = 'Rendering…';
   try {
     await audio.resume();
-    await document.fonts.ready;
+    await document.fonts.load('800 100px "Inter Tight Variable"').catch(() => undefined);
     const img = demoImage();
     source.setStill(img, img.width, img.height, 'Demo image');
     const wav = await demoTrack();
@@ -549,10 +558,11 @@ function savePng() {
   if (!hasSource()) return toast('Nothing to save yet.');
   // Draw a clean frame (no live edge, no grid) and grab it in the same task
   renderer.display(displayUniforms(false), true);
-  renderer.canvas.toBlob((blob) => {
-    if (blob) download(blob, `visual-scan-${stamp()}.png`);
+  renderer.canvas.toBlob(async (blob) => {
+    if (!blob) return toast('Could not create the PNG.');
+    const r = await download(blob, `visual-scan-${stamp()}.png`);
+    toast(r === 'saved' ? `Saved PNG · ${renderer.width} × ${renderer.height}` : r === 'declined' ? 'Save cancelled.' : 'Could not save the PNG.');
   }, 'image/png');
-  toast(`Saved PNG · ${renderer.width} × ${renderer.height}`);
 }
 $('b-png').addEventListener('click', savePng);
 
@@ -562,8 +572,8 @@ async function toggleRecord() {
     const { blob, ext } = await recorder.stop();
     btn.classList.remove('on');
     $('b-rec-t').textContent = 'Record';
-    download(blob, `visual-scan-${stamp()}.${ext}`);
-    toast(`Saved ${ext.toUpperCase()} · ${(blob.size / 1e6).toFixed(1)} MB`);
+    const r = await download(blob, `visual-scan-${stamp()}.${ext}`);
+    toast(r === 'saved' ? `Saved ${ext.toUpperCase()} · ${(blob.size / 1e6).toFixed(1)} MB` : r === 'declined' ? 'Save cancelled.' : 'Could not save the video.');
     return;
   }
   if (!Recorder.supported()) return toast("Recording isn't supported in this browser.");
