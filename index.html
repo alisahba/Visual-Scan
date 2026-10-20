@@ -9,8 +9,8 @@
       rel="icon"
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%230d0d0d'/%3E%3Crect x='15' width='3' height='32' fill='%23ff4a1c'/%3E%3C/svg%3E"
     />
-    <script type="module" crossorigin src="./assets/index-C3kGlIUI.js"></script>
-    <link rel="stylesheet" crossorigin href="./assets/index-DPDP59ZQ.css">
+    <script type="module" crossorigin src="./assets/index-BT_iGLO-.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-Cpiz5Q2L.css">
   </head>
   <body>
     <div class="app" id="app">
@@ -26,6 +26,7 @@
           <span id="m-fps">— fps</span>
         </div>
         <div class="actions">
+          <button class="btn ghost" id="b-panel" type="button" title="Show or hide the panel (P)">Panel</button>
           <button class="btn ghost" id="b-theme" type="button">Dark</button>
           <button class="btn ghost" id="b-perform" type="button">Perform <kbd>F</kbd></button>
         </div>
@@ -78,7 +79,12 @@
             <span>Low <b id="v-low">00</b></span>
             <span>Mid <b id="v-mid">00</b></span>
             <span>High <b id="v-high">00</b></span>
-            <span class="hit" id="v-hit">Hit</span>
+          </div>
+          <div class="hits" aria-label="Detected hits">
+            <span class="hit" id="v-kick">Kick</span>
+            <span class="hit" id="v-snare">Snare</span>
+            <span class="hit" id="v-hat">Hat</span>
+            <span class="energy"><i id="v-energy"></i></span>
           </div>
           <div class="pitch">
             <span>Pitch <b id="v-note">—</b></span>
@@ -179,8 +185,11 @@
           <span><kbd>F</kbd> Perform</span>
           <span><kbd>1–4</kbd> Presets</span>
           <span><kbd>E</kbd> Engine</span>
+          <span><kbd>P</kbd> Panel</span>
         </footer>
       </aside>
+
+      <div class="resizer" id="resizer" title="Drag to resize the panel. Double-click to reset." aria-hidden="true"></div>
 
       <main class="stage" id="stage">
         <div class="frame" id="frame">
@@ -194,7 +203,7 @@
             </ol>
             <div class="empty-cta">
               <button type="button" class="btn solid" id="b-demo">Load the demo</button>
-              <span class="note">A built-in image and a 60-second synth track.</span>
+              <span class="note" id="demo-note">A built-in image and a 60-second synth track.</span>
             </div>
           </div>
           <div class="toast" id="toast" role="status" aria-live="polite"></div>
