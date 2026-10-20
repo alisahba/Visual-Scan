@@ -63,11 +63,15 @@ export class SourceManager {
   setStill(img: HTMLCanvasElement | HTMLImageElement | ImageBitmap, w: number, h: number, name: string) {
     this.stopVideo();
     const k = Math.min(1, MAX_STILL / Math.max(w, h));
-    if (k < 1) {
+    // Always hand WebGL a canvas: browsers that follow the spec (Firefox,
+    // Safari) ignore the flip-Y upload flag for ImageBitmaps, which loaded
+    // images upside down there.
+    if (k < 1 || !(img instanceof HTMLCanvasElement)) {
       const c = document.createElement('canvas');
       c.width = Math.round(w * k);
       c.height = Math.round(h * k);
       c.getContext('2d')!.drawImage(img, 0, 0, c.width, c.height);
+      if ('close' in img) img.close();
       img = c;
       w = c.width;
       h = c.height;
