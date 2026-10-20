@@ -93,6 +93,9 @@ export class AudioEngine {
   private logPitch = Math.log2(220);
   private rangeLo = Math.log2(80);
   private rangeHi = Math.log2(2000);
+  // Running histogram of pitch (log scale) for equalisation
+  private pHist = new Float32Array(PITCH_BINS);
+  private pHistTotal = 0;
 
   constructor() {
     this.ctx = new AudioContext({ latencyHint: 'interactive' });
@@ -483,9 +486,34 @@ export class AudioEngine {
     this.rangeHi = lp > this.rangeHi ? lp : this.rangeHi + (lp - this.rangeHi) * (1 - Math.exp(-dt / 12));
     const span = Math.max(1.5, this.rangeHi - this.rangeLo);
     const mid = (this.rangeHi + this.rangeLo) / 2;
-    F.pitch = clamp01((lp - (mid - span / 2)) / span);
+    const ranged = clamp01((lp - (mid - span / 2)) / span);
+
+    // Equalise: map pitch through the track's own recent distribution, so the
+    // notes it actually plays spread over the whole tone scale (order kept:
+    // higher is still higher). Otherwise a track that sits in a narrow band
+    // only ever visits a few tones of the image.
+    const decay = Math.exp(-dt / 40);
+    for (let i = 0; i < PITCH_BINS; i++) this.pHist[i] *= decay;
+    this.pHistTotal *= decay;
+    const fb = clamp01((lp - P_LO) / (P_HI - P_LO)) * (PITCH_BINS - 1);
+    const bi = Math.floor(fb);
+    const bf = fb - bi;
+    this.pHist[bi] += dt * (1 - bf);
+    if (bi + 1 < PITCH_BINS) this.pHist[bi + 1] += dt * bf;
+    this.pHistTotal += dt;
+    let below = 0;
+    for (let i = 0; i < bi; i++) below += this.pHist[i];
+    below += this.pHist[bi] * (0.5 + bf * 0.5);
+    const cdf = this.pHistTotal > 0 ? clamp01(below / this.pHistTotal) : ranged;
+    // Blend in the plain range while the histogram is still young
+    const trust = Math.min(1, this.pHistTotal / 8);
+    F.pitch = ranged + (cdf - ranged) * trust;
   }
 }
+
+const PITCH_BINS = 72;
+const P_LO = Math.log2(30);
+const P_HI = Math.log2(12000);
 
 const NOTES = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'B'];
 function noteName(hz: number): string {

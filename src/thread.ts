@@ -1,43 +1,30 @@
-// Map engine: the sound walks through the image by tone, and each canvas
-// column is the image's pixels along the line joining where the walk is now
-// to where it has been.
-//
-// pitch -> tone (high = dark by default) -> pick a pixel of that tone near the
-// last one -> column = pixels on the line through the walk's followers.
+// Thread engine: each canvas column is the image's pixels along the line
+// joining where the walk is now to where it has been.
 
 import type { Features } from './audio';
 import type { Params } from './state';
-import { ToneMap } from './tonemap';
+import type { ToneMap } from './tonemap';
+import { Walker } from './walker';
 
-/** Texture rows per column: row 0 = (ax, ay, bx, by), row 1 = (mx, my, length px, unused). */
+/** Texture rows per column: row 0 = (ax, ay, bx, by), row 1 = (mx, my, length px, written). */
 export const THREAD_ROWS = 2;
-const HISTORY = 4;
-const TRAIL = 240;
 
 export class Threader {
-  readonly tone = new ToneMap();
+  readonly walker = new Walker();
   sweepRes = 0;
   data = new Float32Array(0);
   dirtyLo = Infinity;
   dirtyHi = -1;
-
-  /** Latest picks in source uv (y up), newest at `head`. */
-  private picks = new Float32Array(HISTORY * 2);
-  private head = -1;
-  private count = 0;
-  private hx = 1;
-  private hy = 0;
   /** The line the newest column samples (a, m, b in uv), for the preview. */
   readonly drawn = new Float32Array(6);
   hasDrawn = false;
-  private lastPitch = 0.5;
-  private curlSign = 1;
-  private steerUv: [number, number] | null = null;
 
-  /** Recent picks for drawing the walk on the preview (uv). */
-  readonly trail = new Float32Array(TRAIL * 2);
-  trailHead = -1;
-  trailCount = 0;
+  // Followers of the walk: b tracks the newest pick (Glide), a is a slow
+  // average of where it has been (Span), m sits in between (Bend).
+  private fa = [0.5, 0.5];
+  private fm = [0.5, 0.5];
+  private fb = [0.5, 0.5];
+  private followersReady = false;
 
   setSweepRes(n: number) {
     if (n === this.sweepRes) return;
@@ -47,93 +34,8 @@ export class Threader {
     this.dirtyHi = n - 1;
   }
 
-  steer(uv: [number, number] | null) {
-    this.steerUv = uv;
-  }
-
-  get pos(): [number, number] {
-    if (this.head < 0) return [0.5, 0.5];
-    return [this.picks[this.head * 2], this.picks[this.head * 2 + 1]];
-  }
-
-  /**
-   * The line each column samples joins three followers of the walk:
-   * b tracks the newest pick (smoothed by Glide), a is a slow average of
-   * where the walk has been (memory = Span), m sits in between (for Bend).
-   */
-  private fa = [0.5, 0.5];
-  private fm = [0.5, 0.5];
-  private fb = [0.5, 0.5];
-  private followersReady = false;
-
-  /** Map the current pitch to a target tone rank. */
-  toneFor(F: Features, p: Params): number {
-    let t = p.invert ? F.pitch : 1 - F.pitch;
-    t = 0.5 + (t - 0.5) * (1 + 3 * p.contrast);
-    return Math.max(0, Math.min(1, t));
-  }
-
-  private push(u: number, v: number) {
-    this.head = (this.head + 1) % HISTORY;
-    this.picks[this.head * 2] = u;
-    this.picks[this.head * 2 + 1] = v;
-    this.count = Math.min(HISTORY, this.count + 1);
-    this.trailHead = (this.trailHead + 1) % TRAIL;
-    this.trail[this.trailHead * 2] = u;
-    this.trail[this.trailHead * 2 + 1] = v;
-    this.trailCount = Math.min(TRAIL, this.trailCount + 1);
-  }
-
-  private step(F: Features, p: Params, turn: boolean) {
-    const T = this.tone;
-    if (!T.ready) return;
-    if (this.head < 0) this.push(Math.random(), Math.random());
-    const [pu, pv] = this.steerUv ?? this.pos;
-    const px = pu * T.w;
-    const py = (1 - pv) * T.h;
-
-    // Curl: the walk keeps turning, so lines between picks become rotating
-    // chords. Rising pitch swerves one way, falling the other. Hits flip the
-    // direction of the curl and kick the heading.
-    const dp = F.pitch - this.lastPitch;
-    this.lastPitch = F.pitch;
-    let a = this.curlSign * p.curl * 0.35 + dp * 3 * p.curl;
-    if (turn) {
-      this.curlSign = -this.curlSign;
-      a += (Math.random() < 0.5 ? -1 : 1) * (0.5 + Math.random() * 1.2);
-    }
-    if (a !== 0) {
-      const c = Math.cos(a);
-      const s = Math.sin(a);
-      [this.hx, this.hy] = [this.hx * c - this.hy * s, this.hx * s + this.hy * c];
-    }
-
-    const tone = this.toneFor(F, p);
-    const diag = Math.hypot(T.w, T.h);
-    // Cubic so the low end (small, coherent steps) gets most of the slider
-    const reach = diag * (0.002 + 0.4 * p.reach ** 3) * (0.3 + 1.4 * F.level);
-    const tolerance = 0.01 + 0.2 * p.tolerance * p.tolerance;
-    const [x, y, jumped] = T.pick(tone, tolerance, px, py, this.hx, this.hy, reach, p.momentum, p.wander);
-
-    // Heading follows the move, smoothed by momentum
-    const dx = x - px;
-    const dy = y - py;
-    const d = Math.hypot(dx, dy);
-    if (d > 1e-6 && !jumped) {
-      const m = 0.35 + 0.6 * p.momentum;
-      let nx = this.hx * m + (dx / d) * (1 - m);
-      let ny = this.hy * m + (dy / d) * (1 - m);
-      const nl = Math.hypot(nx, ny) || 1;
-      nx /= nl;
-      ny /= nl;
-      this.hx = nx;
-      this.hy = ny;
-    }
-    this.push(x / T.w, 1 - y / T.h);
-  }
-
   /** Write thread data for every column the head swept this frame. One pick per column. */
-  fill(cols: number[], F: Features, p: Params, srcW: number, srcH: number) {
+  fill(cols: number[], F: Features, p: Params, tone: ToneMap, srcW: number, srcH: number) {
     if (!cols.length || !this.sweepRes) return;
     let turn = F.onset && p.momentum > 0;
     const R = this.sweepRes;
@@ -142,11 +44,12 @@ export class Threader {
     const ka = 1 / span;
     const km = Math.min(1, 2.5 / span);
     const kb = Math.max(0.01, (1 - p.glide) ** 2);
+    const W = this.walker;
     for (const col of cols) {
-      this.step(F, p, turn);
+      if (!W.step(F, p, tone, turn)) continue;
       turn = false;
-      if (this.count < 1) continue;
-      const [pu, pv] = this.pos;
+      const pu = W.u;
+      const pv = W.v;
       if (!this.followersReady) {
         this.fa = [pu, pv];
         this.fm = [pu, pv];
@@ -168,15 +71,16 @@ export class Threader {
         let dy = (by - ay) * srcH;
         let seg = Math.hypot(dx, dy);
         if (seg < 1e-3) {
-          dx = this.hx;
-          dy = -this.hy;
+          dx = W.hx;
+          dy = -W.hy;
           seg = 1e-3;
         }
         const full = Math.hypot(srcW, srcH);
         const target = seg + (full - seg) * p.extend;
         const k = target / Math.max(seg, 1e-3);
-        const ux = dx / Math.hypot(dx, dy) * (target / 2);
-        const uy = dy / Math.hypot(dx, dy) * (target / 2);
+        const dl = Math.hypot(dx, dy);
+        const ux = (dx / dl) * (target / 2);
+        const uy = (dy / dl) * (target / 2);
         ax = cx - ux / srcW;
         ay = cy - uy / srcH;
         bx = cx + ux / srcW;

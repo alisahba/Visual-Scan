@@ -1,5 +1,6 @@
-import { VERT, ACCUM_FRAG, DISPLAY_FRAG } from './shaders';
+import { VERT, ACCUM_FRAG, DISPLAY_FRAG, STROKE_VERT, STROKE_FRAG, FILL_FRAG } from './shaders';
 import { THREAD_ROWS } from './thread';
+import { SEG_FLOATS } from './paint';
 
 type Target = { tex: WebGLTexture; fbo: WebGLFramebuffer };
 
@@ -44,6 +45,12 @@ export class Renderer {
   private displayProg: WebGLProgram;
   private accumU: Record<string, WebGLUniformLocation | null> = {};
   private displayU: Record<string, WebGLUniformLocation | null> = {};
+  private strokeProg: WebGLProgram;
+  private fillProg: WebGLProgram;
+  private strokeU: Record<string, WebGLUniformLocation | null> = {};
+  private fillU: Record<string, WebGLUniformLocation | null> = {};
+  private strokeVao: WebGLVertexArrayObject;
+  private strokeBuf: WebGLBuffer;
   private targets: Target[] = [];
   private live: Target | null = null;
   private liveValid = false;
@@ -97,6 +104,28 @@ export class Renderer {
     ]) this.accumU[n] = gl.getUniformLocation(this.accumProg, n);
     for (const n of ['uAccum', 'uRes', 'uColour', 'uDuoA', 'uDuoB', 'uBg', 'uGridCol', 'uGrid'])
       this.displayU[n] = gl.getUniformLocation(this.displayProg, n);
+
+    // Paint engine: instanced strokes and an image fill
+    this.strokeProg = this.program(STROKE_VERT, STROKE_FRAG);
+    this.fillProg = this.program(VERT, FILL_FRAG);
+    for (const n of ['uSource', 'uCanvas', 'uRes', 'uCover', 'uSrcPerPx', 'uInk'])
+      this.strokeU[n] = gl.getUniformLocation(this.strokeProg, n);
+    for (const n of ['uSource', 'uCover', 'uLod']) this.fillU[n] = gl.getUniformLocation(this.fillProg, n);
+    this.strokeVao = gl.createVertexArray()!;
+    this.strokeBuf = gl.createBuffer()!;
+    gl.bindVertexArray(this.strokeVao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.strokeBuf);
+    const stride = SEG_FLOATS * 4;
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 4, gl.FLOAT, false, stride, 0);
+    gl.vertexAttribDivisor(0, 1);
+    gl.enableVertexAttribArray(1);
+    gl.vertexAttribPointer(1, 4, gl.FLOAT, false, stride, 16);
+    gl.vertexAttribDivisor(1, 1);
+    gl.enableVertexAttribArray(2);
+    gl.vertexAttribPointer(2, 2, gl.FLOAT, false, stride, 32);
+    gl.vertexAttribDivisor(2, 1);
+    gl.bindVertexArray(null);
 
     // Source texture (still image or the current video frame)
     this.srcTex = gl.createTexture()!;
@@ -387,6 +416,81 @@ export class Renderer {
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     if (!live) this.cur = 1 - this.cur;
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  }
+
+  /** Portion of the source (uv) the canvas shows when the image is cover-fitted. */
+  cover(): [number, number] {
+    const srcA = this.srcW / this.srcH;
+    const outA = this.width / this.height;
+    return srcA > outA ? [outA / srcA, 1] : [1, srcA / outA];
+  }
+
+  private srcPerPx(): number {
+    return (this.srcW * this.cover()[0]) / this.width;
+  }
+
+  /** Paint engine: load the source image into the canvas. */
+  fillWithSource() {
+    const gl = this.gl;
+    const [cx, cy] = this.cover();
+    gl.useProgram(this.fillProg);
+    gl.bindVertexArray(this.vao);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.srcTex);
+    gl.uniform1i(this.fillU.uSource, 0);
+    gl.uniform2f(this.fillU.uCover, cx, cy);
+    gl.uniform1f(this.fillU.uLod, Math.max(0, Math.log2(Math.max(1, this.srcPerPx()))));
+    gl.viewport(0, 0, this.width, this.height);
+    for (const t of this.targets) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, t.fbo);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    this.liveValid = false;
+  }
+
+  /** Paint engine: draw this frame's strokes onto the canvas. ink: 0 colour, 1 clone, 2 smear. */
+  paint(segs: Float32Array, count: number, ink: number) {
+    if (!count) return;
+    const gl = this.gl;
+    let dst = this.targets[this.cur];
+    if (ink === 2) {
+      // Smear reads the canvas, so copy it forward and draw into the copy
+      const src = this.targets[this.cur];
+      dst = this.targets[1 - this.cur];
+      gl.bindFramebuffer(gl.READ_FRAMEBUFFER, src.fbo);
+      gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, dst.fbo);
+      gl.blitFramebuffer(0, 0, this.width, this.height, 0, 0, this.width, this.height, gl.COLOR_BUFFER_BIT, gl.NEAREST);
+      gl.bindFramebuffer(gl.READ_FRAMEBUFFER, null);
+      gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
+      gl.activeTexture(gl.TEXTURE1);
+      gl.bindTexture(gl.TEXTURE_2D, src.tex);
+      this.cur = 1 - this.cur;
+    } else {
+      // Unused but must not be the target we draw into
+      gl.activeTexture(gl.TEXTURE1);
+      gl.bindTexture(gl.TEXTURE_2D, this.targets[1 - this.cur].tex);
+    }
+    const [cx, cy] = this.cover();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, dst.fbo);
+    gl.viewport(0, 0, this.width, this.height);
+    gl.useProgram(this.strokeProg);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.srcTex);
+    const U = this.strokeU;
+    gl.uniform1i(U.uSource, 0);
+    gl.uniform1i(U.uCanvas, 1);
+    gl.uniform2f(U.uRes, this.width, this.height);
+    gl.uniform2f(U.uCover, cx, cy);
+    gl.uniform1f(U.uSrcPerPx, this.srcPerPx());
+    gl.uniform1i(U.uInk, ink);
+    gl.bindVertexArray(this.strokeVao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.strokeBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, segs.subarray(0, count * SEG_FLOATS), gl.STREAM_DRAW);
+    gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, count);
+    gl.bindVertexArray(null);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    this.liveValid = false;
   }
 
   /** Grade the canvas and draw it to the visible WebGL canvas. Pass clean = true to skip the live edge (for stills). */

@@ -73,6 +73,8 @@ export class ToneMap {
     reach: number,
     momentum: number,
     wander: number,
+    explore = 0,
+    cover?: (x: number, y: number) => number,
   ): [number, number, boolean] {
     const R = Math.max(1, reach);
     const qx = px + hx * R;
@@ -93,7 +95,8 @@ export class ToneMap {
       const dy = y + 0.5 - py;
       const dist = Math.hypot(dx, dy);
       const align = dist > 1e-6 ? (dx * hx + dy * hy) / dist : 0;
-      const score = err / tolerance + 0.5 * (Math.abs(dist - R) / R) + momentum * (1 - align) + wander * 1.5 * Math.random();
+      let score = err / tolerance + 0.5 * (Math.abs(dist - R) / R) + momentum * (1 - align) + wander * 1.5 * Math.random();
+      if (cover && explore > 0) score += explore * 2 * cover(x, y);
       if (score < bestScore) {
         bestScore = score;
         best = idx;
@@ -105,6 +108,8 @@ export class ToneMap {
     }
 
     // Jump: sample the tone band across the whole image, prefer the nearest
+    // (and, when exploring, the least painted)
+    const diag = Math.hypot(this.w, this.h);
     const n = this.order.length;
     const centre = Math.round(Math.max(0, Math.min(1, tone)) * (n - 1));
     const half = Math.max(8, Math.round(n * tolerance));
@@ -120,7 +125,8 @@ export class ToneMap {
       const idx = this.order[lo + Math.min(count - 1, Math.floor(off + k * stride))];
       const x = (idx % this.w) + 0.5;
       const y = Math.floor(idx / this.w) + 0.5;
-      const score = Math.hypot(x - px, y - py) * (1 + wander * 3 * Math.random());
+      let score = Math.hypot(x - px, y - py) * (1 + wander * 3 * Math.random());
+      if (cover && explore > 0) score += explore * diag * 1.5 * cover(x, y);
       if (score < bestScore) {
         bestScore = score;
         best = idx;

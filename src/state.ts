@@ -1,6 +1,7 @@
 // All tweakable parameters, their ranges, and presets.
 
-export type Engine = 'map' | 'scan';
+export type Engine = 'paint' | 'thread' | 'scan';
+export type Ink = 'colour' | 'clone' | 'smear';
 export type Axis = 'horizontal' | 'vertical' | 'radial';
 export type Fill = 'pass' | 'loop';
 export type Colour = 'source' | 'mono' | 'duo';
@@ -9,7 +10,16 @@ export type Size = 'hd' | '4k';
 
 export interface Params {
   engine: Engine;
-  // Map engine
+  // Paint engine
+  coarse: number; // log2 of the starting grain (px at 1920 wide)
+  fine: number; // log2 of the final grain
+  density: number;
+  weight: number;
+  pulse: number;
+  burst: number;
+  explore: number;
+  ink: Ink;
+  // Walk (Paint and Thread)
   reach: number;
   momentum: number;
   curl: number;
@@ -44,7 +54,15 @@ export interface Params {
 }
 
 export const DEFAULTS: Params = {
-  engine: 'map',
+  engine: 'paint',
+  coarse: 7,
+  fine: 0,
+  density: 1.2,
+  weight: 0.3,
+  pulse: 0.5,
+  burst: 0.5,
+  explore: 0.5,
+  ink: 'colour',
   reach: 0.35,
   momentum: 0.75,
   curl: 0.4,
@@ -69,7 +87,7 @@ export const DEFAULTS: Params = {
   wet: 0.45,
   timewarp: 0,
   gain: 0,
-  format: '16:9',
+  format: 'source',
   size: 'hd',
   colour: 'source',
   duo: 0,
@@ -84,6 +102,8 @@ export type NumKey = {
 export interface SliderDef {
   key: NumKey;
   group?: string;
+  /** Engines that show this slider (default: all). */
+  engines?: Engine[];
   label: string;
   hint: string;
   min: number;
@@ -94,17 +114,24 @@ export interface SliderDef {
 
 const pct = (v: number) => String(Math.round(v * 100));
 
-export const MAP_SLIDERS: SliderDef[] = [
-  { group: 'Walk', key: 'reach', label: 'Reach', hint: 'How far each step can jump through the image. Louder passages jump further.', min: 0, max: 1, step: 0.01, fmt: pct },
-  { key: 'momentum', label: 'Momentum', hint: 'How firmly the walk holds its heading.', min: 0, max: 1, step: 0.01, fmt: pct },
-  { key: 'curl', label: 'Curl', hint: 'The walk keeps turning, so the lines between picks sweep like string art. Pitch moves swerve it; hits flip it.', min: 0, max: 1, step: 0.01, fmt: pct },
-  { key: 'wander', label: 'Wander', hint: 'Chance in which matching pixel gets picked.', min: 0, max: 1, step: 0.01, fmt: pct },
-  { group: 'Line', key: 'span', label: 'Span', hint: 'Each column joins where the sound is now to where it has been. Span is how far back that memory reaches, in steps.', min: 1, max: 120, step: 1, fmt: (v) => String(v) },
-  { key: 'extend', label: 'Extend', hint: 'Each column is the line through two picks. 0 = only the stretch between them; higher = the same line reaching across the image.', min: 0, max: 1, step: 0.01, fmt: pct },
-  { key: 'bend', label: 'Bend', hint: 'Straight lines between picks, or curves through the pick in between.', min: 0, max: 1, step: 0.01, fmt: pct },
-  { key: 'glide', label: 'Glide', hint: 'How smoothly the newest end of the line follows the picks. 0 = raw and twitchy.', min: 0, max: 1, step: 0.01, fmt: pct },
-  { group: 'Tone', key: 'contrast', label: 'Contrast', hint: 'Pushes notes towards the darkest and lightest pixels.', min: 0, max: 1, step: 0.01, fmt: pct },
-  { key: 'tolerance', label: 'Tolerance', hint: 'How loosely a pixel has to match the tone of the note.', min: 0, max: 1, step: 0.01, fmt: pct },
+export const WALK_SLIDERS: SliderDef[] = [
+  { group: 'Walk', engines: ['paint', 'thread'], key: 'reach', label: 'Reach', hint: 'How far each step can jump through the image. Louder passages jump further.', min: 0, max: 1, step: 0.01, fmt: pct },
+  { engines: ['paint', 'thread'], key: 'momentum', label: 'Momentum', hint: 'How firmly the walk holds its heading.', min: 0, max: 1, step: 0.01, fmt: pct },
+  { engines: ['paint', 'thread'], key: 'curl', label: 'Curl', hint: 'The walk keeps turning, so the lines between picks sweep like string art. Pitch moves swerve it; hits flip it.', min: 0, max: 1, step: 0.01, fmt: pct },
+  { engines: ['paint'], key: 'explore', label: 'Explore', hint: 'Steers the walk towards parts of the image it has not painted yet.', min: 0, max: 1, step: 0.01, fmt: pct },
+  { engines: ['thread'], key: 'wander', label: 'Wander', hint: 'Chance in which matching pixel gets picked.', min: 0, max: 1, step: 0.01, fmt: pct },
+  { group: 'Paint', engines: ['paint'], key: 'coarse', label: 'Coarse', hint: 'Pixel size at the start of the pass. The grain halves step by step until it reaches Fine.', min: 2, max: 8, step: 1, fmt: (v) => 2 ** v + 'px' },
+  { engines: ['paint'], key: 'fine', label: 'Fine', hint: 'Pixel size by the end of the pass.', min: 0, max: 6, step: 1, fmt: (v) => 2 ** v + 'px' },
+  { engines: ['paint'], key: 'density', label: 'Density', hint: 'Roughly how many times the canvas gets painted over in one pass.', min: 0.2, max: 4, step: 0.05, fmt: (v) => v.toFixed(1) + '×' },
+  { engines: ['paint'], key: 'weight', label: 'Weight', hint: 'Loudness thickens the strokes.', min: 0, max: 1, step: 0.01, fmt: pct },
+  { engines: ['paint'], key: 'pulse', label: 'Pulse', hint: 'Bass hits bring the big pixels back for a moment.', min: 0, max: 1, step: 0.01, fmt: pct },
+  { engines: ['paint'], key: 'burst', label: 'Burst', hint: 'Hits throw out a fan of thin lines from the current pixel.', min: 0, max: 1, step: 0.01, fmt: pct },
+  { group: 'Line', engines: ['thread'], key: 'span', label: 'Span', hint: 'Each column joins where the sound is now to where it has been. Span is how far back that memory reaches, in steps.', min: 1, max: 120, step: 1, fmt: (v) => String(v) },
+  { engines: ['thread'], key: 'extend', label: 'Extend', hint: 'Each column is the line through two picks. 0 = only the stretch between them; higher = the same line reaching across the image.', min: 0, max: 1, step: 0.01, fmt: pct },
+  { engines: ['thread'], key: 'bend', label: 'Bend', hint: 'Straight lines between picks, or curves through the pick in between.', min: 0, max: 1, step: 0.01, fmt: pct },
+  { engines: ['thread'], key: 'glide', label: 'Glide', hint: 'How smoothly the newest end of the line follows the picks. 0 = raw and twitchy.', min: 0, max: 1, step: 0.01, fmt: pct },
+  { group: 'Tone', engines: ['paint', 'thread'], key: 'contrast', label: 'Contrast', hint: 'Pushes notes towards the darkest and lightest pixels.', min: 0, max: 1, step: 0.01, fmt: pct },
+  { engines: ['paint', 'thread'], key: 'tolerance', label: 'Tolerance', hint: 'How loosely a pixel has to match the tone of the note.', min: 0, max: 1, step: 0.01, fmt: pct },
 ];
 
 export const SCAN_SLIDERS: SliderDef[] = [
@@ -140,7 +167,14 @@ export interface Preset {
   values: Partial<Params>;
 }
 
-export const MAP_PRESETS: Preset[] = [
+export const PAINT_PRESETS: Preset[] = [
+  { name: 'Mosaic', values: { ink: 'colour', coarse: 7, fine: 0, density: 1.2, weight: 0.3, pulse: 0.5, burst: 0.5, explore: 0.5, reach: 0.35, momentum: 0.75, curl: 0.4, contrast: 0.25, tolerance: 0.25 } },
+  { name: 'Web', values: { ink: 'colour', coarse: 3, fine: 0, density: 0.5, weight: 0, pulse: 0.2, burst: 1, explore: 0.3, reach: 0.75, momentum: 0.3, curl: 0.2, contrast: 0.4, tolerance: 0.2 } },
+  { name: 'Collage', values: { ink: 'clone', coarse: 6, fine: 2, density: 2, weight: 0.6, pulse: 0.6, burst: 0.3, explore: 0.7, reach: 0.5, momentum: 0.8, curl: 0.3, contrast: 0.3, tolerance: 0.3 } },
+  { name: 'Melt', values: { ink: 'smear', coarse: 5, fine: 0, density: 3, weight: 0.5, pulse: 0.3, burst: 0.2, explore: 0.4, reach: 0.3, momentum: 0.9, curl: 0.7, contrast: 0.2, tolerance: 0.4 } },
+];
+
+export const THREAD_PRESETS: Preset[] = [
   { name: 'Thread', values: { reach: 0.35, momentum: 0.75, curl: 0.4, span: 30, extend: 0.45, bend: 0.6, glide: 0.6, contrast: 0.25, tolerance: 0.25, wander: 0.1 } },
   { name: 'Weave', values: { reach: 0.25, momentum: 0.85, curl: 0.2, span: 60, extend: 0.8, bend: 0.8, glide: 0.6, contrast: 0.2, tolerance: 0.4, wander: 0.05 } },
   { name: 'Pixel', values: { reach: 0.9, momentum: 0.05, curl: 0, span: 1, extend: 0, bend: 0, glide: 0, contrast: 0.7, tolerance: 0.1, wander: 0.6 } },
@@ -154,7 +188,7 @@ export const SCAN_PRESETS: Preset[] = [
   { name: 'Orbit', values: { axis: 'radial', travel: 0.7, elastic: 0.5, displace: 0.45, slices: 0, breathe: 0.45, repeat: 0.3, jitter: 0.1, wet: 0.4 } },
 ];
 
-const STORE_KEY = 'visual-scan:params:v5';
+const STORE_KEY = 'visual-scan:params:v6';
 
 export function loadParams(): Params {
   try {

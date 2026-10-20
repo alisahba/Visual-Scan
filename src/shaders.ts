@@ -214,3 +214,92 @@ void main() {
   }
   outColor = vec4(mix(bg, col, a.a), 1.0);
 }`;
+
+// ───────── Paint engine ─────────
+// Strokes are instanced quads. Every fragment snaps to the centre of its grain
+// cell and tests that point against the stroke, so a whole cell is in or out
+// and takes one colour: crisp big pixels that refine as the grain shrinks.
+
+export const STROKE_VERT = /* glsl */ `#version 300 es
+layout(location = 0) in vec4 aPQ;   // P.xy, Q.xy in canvas px
+layout(location = 1) in vec4 aUV;   // P.uv, Q.uv in the source
+layout(location = 2) in vec2 aWC;   // half width px, cell px
+uniform vec2 uRes;
+out vec2 vPos;
+flat out vec4 vPQ;
+flat out vec4 vUV;
+flat out vec2 vWC;
+void main() {
+  int c = gl_VertexID % 6;
+  vec2 k = vec2((c == 1 || c == 2 || c == 4) ? 1.0 : 0.0, (c == 2 || c == 4 || c == 5) ? 1.0 : 0.0);
+  vec2 P = aPQ.xy;
+  vec2 Q = aPQ.zw;
+  vec2 d = Q - P;
+  float L = length(d);
+  vec2 dir = L > 1e-4 ? d / L : vec2(1.0, 0.0);
+  vec2 nrm = vec2(-dir.y, dir.x);
+  float pad = aWC.x + aWC.y * 1.5;
+  vec2 pos = mix(P - dir * pad, Q + dir * pad, k.x) + nrm * pad * (k.y * 2.0 - 1.0);
+  vPos = pos;
+  vPQ = aPQ;
+  vUV = aUV;
+  vWC = aWC;
+  gl_Position = vec4(pos / uRes * 2.0 - 1.0, 0.0, 1.0);
+}`;
+
+export const STROKE_FRAG = /* glsl */ `#version 300 es
+precision highp float;
+in vec2 vPos;
+flat in vec4 vPQ;
+flat in vec4 vUV;
+flat in vec2 vWC;
+out vec4 outColor;
+uniform sampler2D uSource;
+uniform sampler2D uCanvas;
+uniform vec2 uRes;
+uniform vec2 uCover;      // source uv span visible on the canvas
+uniform float uSrcPerPx;  // source pixels per canvas pixel
+uniform int uInk;         // 0 colour, 1 clone, 2 smear
+
+float mirror(float x) { return 1.0 - abs(1.0 - mod(x, 2.0)); }
+
+void main() {
+  float cell = vWC.y;
+  vec2 cc = (floor(vPos / cell) + 0.5) * cell;
+  vec2 P = vPQ.xy;
+  vec2 Q = vPQ.zw;
+  vec2 pq = Q - P;
+  float L2 = dot(pq, pq);
+  float t = L2 > 1e-6 ? clamp(dot(cc - P, pq) / L2, 0.0, 1.0) : 0.0;
+  float d = length(cc - (P + pq * t));
+  if (d > max(vWC.x, cell * 0.72)) discard;
+
+  // Sample at the grain's scale: big cells take the average colour of their area
+  float lod = log2(max(cell * uSrcPerPx, 1.0));
+  vec3 col;
+  if (uInk == 0) {
+    // Colour: a gradient between the two picked pixels
+    col = mix(textureLod(uSource, vUV.xy, lod).rgb, textureLod(uSource, vUV.zw, lod).rgb, t);
+  } else if (uInk == 1) {
+    // Clone: the stroke carries the image from one step back along the walk
+    vec2 suv = 0.5 + (cc / uRes - 0.5) * uCover - (vUV.zw - vUV.xy);
+    col = textureLod(uSource, vec2(mirror(suv.x), mirror(suv.y)), lod).rgb;
+  } else {
+    // Smear: drags the canvas's own colours from P to Q
+    col = mix(texture(uCanvas, P / uRes).rgb, texture(uCanvas, Q / uRes).rgb, t);
+  }
+  outColor = vec4(col, 1.0);
+}`;
+
+/** Fill the canvas with the source image (cover-fitted). */
+export const FILL_FRAG = /* glsl */ `#version 300 es
+precision highp float;
+in vec2 vUv;
+out vec4 outColor;
+uniform sampler2D uSource;
+uniform vec2 uCover;
+uniform float uLod;
+void main() {
+  vec2 suv = 0.5 + (vUv - 0.5) * uCover;
+  outColor = vec4(textureLod(uSource, suv, uLod).rgb, 1.0);
+}`;
