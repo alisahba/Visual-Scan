@@ -9,8 +9,8 @@
       rel="icon"
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%230d0d0d'/%3E%3Crect x='15' width='3' height='32' fill='%23ff4a1c'/%3E%3C/svg%3E"
     />
-    <script type="module" crossorigin src="./assets/index-BzgFdmkc.js"></script>
-    <link rel="stylesheet" crossorigin href="./assets/index-DOfjFxeF.css">
+    <script type="module" crossorigin src="./assets/index-C3kGlIUI.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-DPDP59ZQ.css">
   </head>
   <body>
     <div class="app" id="app">
@@ -22,6 +22,7 @@
         </div>
         <div class="meta">
           <span id="m-res">—</span>
+          <span id="m-grain"></span>
           <span id="m-fps">— fps</span>
         </div>
         <div class="actions">
@@ -92,11 +93,12 @@
         <section class="sec">
           <header class="sec-h"><span class="n">03</span><h2>Engine</h2><button type="button" class="link" id="b-reset">Reset</button></header>
           <div class="seg" id="seg-engine">
-            <button type="button" data-v="map" title="Pitch picks pixels by tone; columns thread through them">Map</button>
+            <button type="button" data-v="paint" title="The image is the canvas: notes pick pixels by tone and paint lines between them">Paint</button>
+            <button type="button" data-v="thread" title="Notes pick pixels by tone; each column threads the image between them">Thread</button>
             <button type="button" data-v="scan" title="Slit-scan: the slit is bent and moved by the sound">Scan</button>
           </div>
           <p class="note" id="engine-note"></p>
-          <div class="field">
+          <div class="field" id="axis-row">
             <span class="lbl">Axis</span>
             <div class="seg" id="seg-axis">
               <button type="button" data-v="horizontal">Across</button>
@@ -107,6 +109,14 @@
           <div class="field">
             <span class="lbl">Preset</span>
             <div class="seg" id="seg-preset"></div>
+          </div>
+          <div class="field" id="ink-row">
+            <span class="lbl">Ink</span>
+            <div class="seg" id="seg-ink">
+              <button type="button" data-v="colour" title="Each stroke is a gradient between the two picked pixels">Colour</button>
+              <button type="button" data-v="clone" title="Each stroke carries a strip of the image from where the walk just was">Clone</button>
+              <button type="button" data-v="smear" title="Each stroke drags the canvas's own colours along">Smear</button>
+            </div>
           </div>
           <div id="loop-row"></div>
           <div class="sliders" id="sliders-map"></div>
@@ -155,14 +165,9 @@
           <div class="field">
             <span class="lbl">Show</span>
             <div class="toggles">
-              <label class="tog"><input type="checkbox" id="t-head" /><span>Head</span></label>
+              <label class="tog" title="The write-head, or in Paint the walk drawn over the canvas"><input type="checkbox" id="t-head" /><span>Guides</span></label>
               <label class="tog"><input type="checkbox" id="t-grid" /><span>Grid</span></label>
             </div>
-          </div>
-          <div class="btns">
-            <button type="button" class="btn" id="b-clear">Clear <kbd>C</kbd></button>
-            <button type="button" class="btn" id="b-png">PNG <kbd>S</kbd></button>
-            <button type="button" class="btn rec" id="b-rec"><i class="dot"></i><span id="b-rec-t">Record</span> <kbd>R</kbd></button>
           </div>
         </section>
 
@@ -206,6 +211,17 @@
         <div class="seg" id="seg-fill">
           <button type="button" data-v="pass" title="One pass per track: the canvas completes when the song ends">Pass</button>
           <button type="button" data-v="loop" title="Constant speed, paints over itself on each pass">Loop</button>
+        </div>
+        <div class="tr-actions">
+          <button type="button" class="tbtn" id="b-clear" title="Clear (C)">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8a4.5 4.5 0 1 0 1.3-3.2" /><path d="M3 2.5v3h3" /></svg><span class="t">Clear</span>
+          </button>
+          <button type="button" class="tbtn" id="b-png" title="Save PNG (S)">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 3.5h11v9h-11z" /><path d="M2.5 10.5l3.5-3 3 2.5 2-1.5 2.5 2" /></svg><span class="t">PNG</span>
+          </button>
+          <button type="button" class="tbtn rec" id="b-rec" title="Record video (R)">
+            <i class="dot" aria-hidden="true"></i><span class="t" id="b-rec-t">Record</span>
+          </button>
         </div>
       </footer>
     </div>
