@@ -14,6 +14,14 @@ export interface Features {
   lowSlow: number;
   onset: boolean; // a hit landed this frame
   onsetStrength: number;
+  /** Per-band hits this frame: kick (lows), snare (mids), hat (highs). */
+  kick: number; // 0 = none, else strength 0..1
+  snare: number;
+  hat: number;
+  /** Decaying flashes for the UI. */
+  kickPulse: number;
+  snarePulse: number;
+  hatPulse: number;
   pulse: number; // decaying flash after a hit
   /** Detected pitch in Hz (the note when there is one, else spectral centroid). */
   pitchHz: number;
@@ -21,6 +29,10 @@ export interface Features {
   clarity: number;
   /** Pitch normalised to the recent range: 0 = lowest, 1 = highest. */
   pitch: number;
+  /** Pitch smoothed over ~a quarter second: what the walk follows. */
+  tone: number;
+  /** Short-term loudness against the last ~10 s: 0.5 = average, pumps on kicks, drops in breakdowns. */
+  energy: number;
   note: string;
 }
 
@@ -67,10 +79,18 @@ export class AudioEngine {
     lowSlow: 0.3,
     onset: false,
     onsetStrength: 0,
+    kick: 0,
+    snare: 0,
+    hat: 0,
+    kickPulse: 0,
+    snarePulse: 0,
+    hatPulse: 0,
     pulse: 0,
     pitchHz: 0,
     clarity: 0,
     pitch: 0.5,
+    tone: 0.5,
+    energy: 0.5,
     note: '—',
   };
 
@@ -87,7 +107,14 @@ export class AudioEngine {
   private flux = new Float32Array(FLUX_HISTORY);
   private fluxIdx = 0;
   private lastOnset = 0;
+  // Band ranges (of NB log bands, 30 Hz-16 kHz): kick ~30-120 Hz, snare ~200 Hz-2 kHz, hat ~4-16 kHz
+  private kickDet = new OnsetDetector(1.5, 0.14);
+  private snareDet = new OnsetDetector(1.6, 0.11);
+  private hatDet = new OnsetDetector(1.6, 0.07);
   private clock = 0;
+  private wasTonal = false;
+  private rmsFast = 0;
+  private rmsLong = 0;
   private yinBuf = new Float32Array(1024);
   private yinDiff = new Float32Array(600);
   private logPitch = Math.log2(220);
@@ -160,7 +187,8 @@ export class AudioEngine {
 
   /** Load a track. Decodes it once for the timeline and energy-mapped scanning. */
   async loadFile(file: File | Blob, name: string) {
-    await this.resume();
+    // Don't wait: before any click the context can't start, but decoding still works
+    void this.resume().catch(() => undefined);
     const buf = await file.arrayBuffer();
     const decoded = await this.ctx.decodeAudioData(buf.slice(0));
     this.stopMic();
@@ -360,9 +388,16 @@ export class AudioEngine {
     const atk = 1 - Math.exp(-dt / 0.012);
     const rel = 1 - Math.exp(-dt / 0.14);
     let flux = 0;
+    let fk = 0;
+    let fs = 0;
+    let fh = 0;
     for (let b = 0; b < NB; b++) {
       const v = clamp01((this.raw[b] - (this.ref - range)) / range);
-      flux += Math.max(0, v - this.prevRaw[b]);
+      const up = Math.max(0, v - this.prevRaw[b]);
+      flux += up;
+      if (b < 26) fk += up;
+      else if (b >= 40 && b < 84) fs += up;
+      else if (b >= 98) fh += up;
       this.prevRaw[b] = v;
       const cur = F.bands[b];
       F.bands[b] = cur + (v - cur) * (v > cur ? atk : rel);
@@ -382,6 +417,12 @@ export class AudioEngine {
     const lv = clamp01((rmsDb - (this.levelRef - 30)) / 30);
     F.level += (lv - F.level) * (lv > F.level ? atk : rel);
     F.levelSlow += (F.level - F.levelSlow) * (1 - Math.exp(-dt / 4));
+    // Energy keeps the track's dynamics (no auto-gain): fast RMS over long RMS
+    const rms = Math.sqrt(sum / this.time.length);
+    this.rmsFast += (rms - this.rmsFast) * (1 - Math.exp(-dt / (rms > this.rmsFast ? 0.02 : 0.12)));
+    if (active) this.rmsLong += (rms - this.rmsLong) * (1 - Math.exp(-dt / 10));
+    const ratio = this.rmsLong > 1e-5 ? this.rmsFast / this.rmsLong : 0;
+    F.energy = active ? clamp01(0.5 + 0.6 * Math.log2(ratio + 1e-3)) : F.energy * Math.exp(-dt / 0.3);
     F.lowSlow += (F.low - F.lowSlow) * (1 - Math.exp(-dt / 2));
 
     // Hits: spectral flux against an adaptive threshold
@@ -402,6 +443,14 @@ export class AudioEngine {
       F.pulse = Math.max(F.pulse, 0.35 + 0.65 * F.onsetStrength);
     }
     F.pulse *= Math.exp(-dt / 0.16);
+
+    // Per-band hits, so kicks, snares and hats can each leave their own mark
+    F.kick = this.kickDet.update(fk / 26, this.clock, active);
+    F.snare = this.snareDet.update(fs / 44, this.clock, active);
+    F.hat = this.hatDet.update(fh / 30, this.clock, active);
+    F.kickPulse = Math.max(F.kickPulse * Math.exp(-dt / 0.14), F.kick ? 0.4 + 0.6 * F.kick : 0);
+    F.snarePulse = Math.max(F.snarePulse * Math.exp(-dt / 0.12), F.snare ? 0.4 + 0.6 * F.snare : 0);
+    F.hatPulse = Math.max(F.hatPulse * Math.exp(-dt / 0.08), F.hat ? 0.4 + 0.6 * F.hat : 0);
 
     this.updatePitch(dt, active);
   }
@@ -473,9 +522,11 @@ export class AudioEngine {
     }
     const centroidLog = den > 0 ? num / den : this.logPitch;
 
-    const tonal = clarity > 0.55 && yinHz > 40;
+    // Hysteresis so it doesn't flip between note and brightness every frame
+    const tonal = yinHz > 40 && clarity > (this.wasTonal ? 0.45 : 0.7);
+    this.wasTonal = tonal;
     const target = tonal ? Math.log2(yinHz) : centroidLog;
-    this.logPitch += (target - this.logPitch) * (1 - Math.exp(-dt / 0.03));
+    this.logPitch += (target - this.logPitch) * (1 - Math.exp(-dt / 0.06));
     F.pitchHz = Math.pow(2, this.logPitch);
     F.clarity += (clarity - F.clarity) * (1 - Math.exp(-dt / 0.08));
     F.note = tonal ? noteName(yinHz) : '—';
@@ -508,6 +559,33 @@ export class AudioEngine {
     // Blend in the plain range while the histogram is still young
     const trust = Math.min(1, this.pHistTotal / 8);
     F.pitch = ranged + (cdf - ranged) * trust;
+    F.tone += (F.pitch - F.tone) * (1 - Math.exp(-dt / 0.22));
+  }
+}
+
+/** Spectral-flux onset detector with an adaptive threshold. Returns strength 0..1, or 0. */
+class OnsetDetector {
+  private hist = new Float32Array(43);
+  private idx = 0;
+  private last = -1;
+  constructor(
+    private k: number,
+    private minGap: number,
+  ) {}
+
+  update(flux: number, clock: number, active: boolean): number {
+    const h = this.hist;
+    let mean = 0;
+    for (let i = 0; i < h.length; i++) mean += h[i];
+    mean /= h.length;
+    let v = 0;
+    for (let i = 0; i < h.length; i++) v += (h[i] - mean) ** 2;
+    const std = Math.sqrt(v / h.length);
+    h[this.idx] = flux;
+    this.idx = (this.idx + 1) % h.length;
+    if (!active || flux < 0.01 || flux < mean + this.k * std + 0.004 || clock - this.last < this.minGap) return 0;
+    this.last = clock;
+    return Math.max(0.05, Math.min(1, (flux - mean) / (4 * std + 0.02)));
   }
 }
 

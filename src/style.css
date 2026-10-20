@@ -93,6 +93,7 @@ kbd {
 /* ───────── Layout ───────── */
 
 .app {
+  position: relative;
   display: grid;
   grid-template-columns: var(--panel-w) minmax(0, 1fr);
   grid-template-rows: var(--bar-h) minmax(0, 1fr) var(--tr-h);
@@ -111,6 +112,9 @@ kbd {
   display: flex;
   align-items: center;
   gap: 10px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
   padding: 0 var(--pad);
   height: 100%;
   border-right: 1px solid var(--rule);
@@ -124,6 +128,9 @@ kbd {
 
 .brand .sub {
   color: var(--mid);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .logo {
@@ -170,9 +177,53 @@ kbd {
 .panel {
   grid-row: 2 / 4;
   border-right: 1px solid var(--rule);
+  overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-width: thin;
+  scrollbar-gutter: stable;
+  container: panel / inline-size;
+}
+
+/* Drag handle on the panel's edge */
+.resizer {
+  position: absolute;
+  top: var(--bar-h);
+  bottom: 0;
+  left: calc(var(--panel-w) - 4px);
+  width: 8px;
+  z-index: 6;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.resizer::after {
+  content: '';
+  position: absolute;
+  left: 3px;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: transparent;
+  transition: background 0.15s;
+}
+
+.resizer:hover::after,
+.resizer.drag::after {
+  background: var(--accent);
+}
+
+body.no-panel .app {
+  grid-template-columns: 0 minmax(0, 1fr);
+}
+
+body.no-panel .panel,
+body.no-panel .resizer {
+  display: none;
+}
+
+body.no-panel .top {
+  grid-template-columns: auto 1fr auto;
 }
 
 .stage {
@@ -220,6 +271,7 @@ kbd {
 
 .sec {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
   padding: 0 var(--pad) var(--pad);
   border-bottom: 1px solid var(--rule);
@@ -264,6 +316,10 @@ kbd {
 
 .sec-h:hover .fold {
   color: var(--ink);
+}
+
+.sec > * {
+  min-width: 0;
 }
 
 .sec.collapsed {
@@ -338,6 +394,8 @@ kbd {
 .seg button {
   flex: 1 1 0;
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   height: 28px;
   padding: 0 6px;
   background: transparent;
@@ -461,6 +519,8 @@ select {
 }
 
 .file span {
+  flex: 1 1 auto;
+  min-width: 0;
   font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -486,7 +546,7 @@ select {
 
 .bands {
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr auto;
+  grid-template-columns: 1fr 1fr 1fr;
   gap: 8px;
   font-size: 12px;
   color: var(--mid);
@@ -497,11 +557,44 @@ select {
   font-weight: 600;
 }
 
+.hits {
+  display: grid;
+  grid-template-columns: repeat(3, auto) minmax(0, 1fr);
+  gap: 6px;
+  align-items: center;
+  font-size: 11px;
+}
+
 .hit {
-  padding: 0 6px;
+  padding: 1px 6px;
   border: 1px solid var(--rule);
   color: var(--mid);
+  text-align: center;
   transition: background 0.08s;
+}
+
+/* Energy: loudness against the track's own average (centre mark = average) */
+.energy {
+  position: relative;
+  height: 6px;
+  background: var(--rule);
+}
+
+.energy::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: -3px;
+  bottom: -3px;
+  width: 1px;
+  background: var(--mid);
+}
+
+.energy i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 50%;
+  background: var(--ink);
 }
 
 .hit.on {
@@ -856,17 +949,31 @@ input[type='range']:focus-visible::-moz-range-thumb {
   display: none;
 }
 
+/* Image and track loaded: just the play prompt, over a soft scrim */
+.empty.ready {
+  justify-content: flex-end;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.55), transparent 40%);
+}
+
+.empty.ready .steps {
+  display: none;
+}
+
+.empty.ready .empty-cta .note {
+  color: #f2f2ee;
+}
+
 .toast {
   position: absolute;
   left: 12px;
-  bottom: 12px;
+  top: 12px;
   background: var(--ink);
   color: var(--paper);
   padding: 8px 12px;
   font-size: 12px;
   font-weight: 500;
   opacity: 0;
-  transform: translateY(6px);
+  transform: translateY(-6px);
   transition: opacity 0.2s, transform 0.2s;
   pointer-events: none;
   max-width: calc(100% - 24px);
@@ -875,6 +982,11 @@ input[type='range']:focus-visible::-moz-range-thumb {
 .toast.show {
   opacity: 1;
   transform: none;
+}
+
+/* Keep clear of the paint overlay's grain tag */
+.frame .toast {
+  max-width: min(420px, calc(100% - 24px));
 }
 
 /* ───────── Transport ───────── */
@@ -1003,6 +1115,49 @@ body.perform.idle {
   cursor: none;
 }
 
+/* ───────── Panel width: rows adapt to how wide the panel is ───────── */
+
+@container panel (max-width: 300px) {
+  /* Labels sit above their controls so segmented buttons get the full width */
+  .field {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 5px;
+  }
+
+  .row {
+    grid-template-columns: 60px minmax(0, 1fr) 40px;
+    gap: 8px;
+  }
+
+  .file small,
+  .note-row .note {
+    display: none;
+  }
+
+  .seg button {
+    font-size: 11px;
+    padding: 0 3px;
+  }
+
+  .sec-s {
+    max-width: 110px;
+  }
+}
+
+@container panel (min-width: 420px) {
+  .preview {
+    height: 240px;
+  }
+
+  .row {
+    grid-template-columns: 96px minmax(0, 1fr) 52px;
+  }
+
+  .field {
+    grid-template-columns: 96px minmax(0, 1fr);
+  }
+}
+
 /* ───────── Short screens: tighten the panel so more fits ───────── */
 
 @media (max-height: 860px) and (min-width: 901px) {
@@ -1055,6 +1210,11 @@ body.perform.idle {
 /* ───────── Small screens ───────── */
 
 @media (max-width: 900px) {
+  .resizer,
+  #b-panel {
+    display: none;
+  }
+
   .app {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: var(--bar-h) auto auto auto;

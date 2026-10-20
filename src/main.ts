@@ -4,7 +4,7 @@ import { AudioEngine } from './audio';
 import { SourceManager } from './source';
 import { Scanner } from './scanner';
 import { Threader } from './thread';
-import { Painter } from './paint';
+import { Painter, type HitMark } from './paint';
 import { ToneMap } from './tonemap';
 import type { Walker } from './walker';
 import { Renderer, SPEC_BANDS } from './renderer';
@@ -491,8 +491,34 @@ selInput.addEventListener('change', () => startInput(selInput.value));
 
 // Demo
 $('b-demo').addEventListener('click', loadDemo);
+// Default media: an image and a track in demo/, loaded on startup when present.
+// Without them (e.g. a public build), the demo button renders a synth track.
+const DEFAULT_IMAGE = 'demo/daffodil.jpg';
+const DEFAULT_TRACK = 'demo/acid-dream.mp3';
+let defaultsLoaded = false;
+
+async function loadDefaults(): Promise<boolean> {
+  try {
+    const [img, trk] = await Promise.all([fetch(DEFAULT_IMAGE), fetch(DEFAULT_TRACK)]);
+    const ok = img.ok && trk.ok && (img.headers.get('content-type') || '').startsWith('image/');
+    if (!ok) return false;
+    await source.loadImage(await img.blob(), 'Daffodil');
+    await loadTrack(await trk.blob(), 'Anna Hjalmarsson – Acid Dream');
+    defaultsLoaded = true;
+    $('b-demo').textContent = 'Play';
+    $('demo-note').textContent = 'Daffodil × Acid Dream. Drop your own image or track any time.';
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function loadDemo() {
   const btn = $<HTMLButtonElement>('b-demo');
+  if (defaultsLoaded && hasSource() && audio.mode === 'file') {
+    await togglePlay();
+    return;
+  }
   btn.disabled = true;
   btn.textContent = 'Rendering…';
   try {
@@ -651,6 +677,48 @@ window.addEventListener('pointermove', () => {
   idleTimer = window.setTimeout(() => document.body.classList.add('idle'), 2000);
 });
 
+// ───────── Panel: resize and hide ─────────
+
+const PANEL_KEY = 'visual-scan:panel-w';
+const app = $('app');
+const resizer = $('resizer');
+const clampPanel = (w: number) => Math.round(Math.max(248, Math.min(Math.min(600, window.innerWidth * 0.5), w)));
+try {
+  const w = Number(localStorage.getItem(PANEL_KEY));
+  if (w) app.style.setProperty('--panel-w', clampPanel(w) + 'px');
+} catch {
+  /* storage unavailable */
+}
+resizer.addEventListener('pointerdown', (e) => {
+  resizer.setPointerCapture(e.pointerId);
+  resizer.classList.add('drag');
+});
+resizer.addEventListener('pointermove', (e) => {
+  if (!resizer.hasPointerCapture(e.pointerId)) return;
+  app.style.setProperty('--panel-w', clampPanel(e.clientX) + 'px');
+});
+const endResize = () => {
+  resizer.classList.remove('drag');
+  const w = parseInt(app.style.getPropertyValue('--panel-w'), 10);
+  try {
+    if (w) localStorage.setItem(PANEL_KEY, String(w));
+  } catch {
+    /* storage unavailable */
+  }
+};
+resizer.addEventListener('pointerup', endResize);
+resizer.addEventListener('pointercancel', endResize);
+resizer.addEventListener('dblclick', () => {
+  app.style.removeProperty('--panel-w');
+  try {
+    localStorage.removeItem(PANEL_KEY);
+  } catch {
+    /* storage unavailable */
+  }
+});
+const togglePanel = () => document.body.classList.toggle('no-panel');
+$('b-panel').addEventListener('click', togglePanel);
+
 // ───────── Folding panel sections ─────────
 // Headers fold their section; the state is remembered per browser. On short
 // screens Output starts folded so the engine controls fit.
@@ -708,6 +776,7 @@ window.addEventListener('keydown', (e) => {
   else if (k === 'f') togglePerform();
   else if (k === 'escape' && document.body.classList.contains('perform')) togglePerform(false);
   else if (['1', '2', '3', '4'].includes(k)) applyPreset(Number(k) - 1);
+  else if (k === 'p') togglePanel();
   else if (k === 'e') setEngine(params.engine === 'paint' ? 'thread' : params.engine === 'thread' ? 'scan' : 'paint');
   else if (k === 'h') {
     setParam('head', !params.head);
@@ -996,12 +1065,104 @@ function drawWalk(g: CanvasRenderingContext2D, ox: number, oy: number, w: number
   g.fillRect(toX(wk.u) - 3, toY(wk.v) - 3, 6, 6);
 }
 
+// Hits drawn this frame (canvas px) and a rolling score of recent hits + tone
+const liveMarks: (HitMark & { t: number })[] = [];
+type ScoreEvent = { t: number; type: HitMark['type'] | 'tone'; v: number };
+const score: ScoreEvent[] = [];
+const SCORE_SECONDS = 8;
+let lastToneSample = 0;
+
+function recordScore(F: typeof audio.features, playing: boolean) {
+  const now = performance.now() / 1000;
+  if (playing) {
+    if (F.kick) score.push({ t: now, type: 'kick', v: F.kick });
+    if (F.snare) score.push({ t: now, type: 'snare', v: F.snare });
+    if (F.hat) score.push({ t: now, type: 'hat', v: F.hat });
+    if (now - lastToneSample > 1 / 30) {
+      score.push({ t: now, type: 'tone', v: params.invert ? F.tone : 1 - F.tone });
+      lastToneSample = now;
+    }
+  }
+  while (score.length && now - score[0].t > SCORE_SECONDS) score.shift();
+  while (liveMarks.length && now - liveMarks[0].t > 0.4) liveMarks.shift();
+}
+
+/** Outlines where hits landed, fading over a few hundred ms. */
+function drawMarks(g: CanvasRenderingContext2D, W: number, H: number) {
+  const now = performance.now() / 1000;
+  const sx = W / renderer.width;
+  const sy = H / renderer.height;
+  for (const m of liveMarks) {
+    const a = 1 - (now - m.t) / 0.4;
+    if (a <= 0) continue;
+    const x = m.x * sx;
+    const y = H - m.y * sy;
+    const r = (m.size / 2) * sx;
+    g.globalAlpha = a;
+    g.strokeStyle = m.type === 'kick' ? theme.accent : '#ffffff';
+    g.lineWidth = m.type === 'kick' ? 2 : 1;
+    g.beginPath();
+    if (m.type === 'kick') g.rect(x - r - 3, y - r - 3, r * 2 + 6, r * 2 + 6);
+    else if (m.type === 'snare') g.arc(x, y, r * (1.2 - 0.4 * a), 0, Math.PI * 2);
+    else {
+      g.moveTo(x - r, y);
+      g.lineTo(x + r, y);
+      g.moveTo(x, y - r);
+      g.lineTo(x, y + r);
+    }
+    g.stroke();
+  }
+  g.globalAlpha = 1;
+}
+
+/** The last few seconds as a strip: kicks, snares, hats and the tone being asked for. */
+function drawScore(g: CanvasRenderingContext2D, W: number, H: number) {
+  const now = performance.now() / 1000;
+  const rowH = 9;
+  const top = H - rowH * 4 - 10;
+  const left = 46;
+  const span = W - left - 8;
+  g.fillStyle = 'rgba(0,0,0,0.55)';
+  g.fillRect(0, top - 6, W, H - top + 6);
+  g.font = '500 9px "Inter Tight Variable", Helvetica, Arial, sans-serif';
+  g.fillStyle = 'rgba(255,255,255,0.6)';
+  ['Kick', 'Snare', 'Hat', 'Tone'].forEach((n, i) => g.fillText(n, 8, top + i * rowH + 7));
+  const xAt = (t: number) => left + span * (1 - (now - t) / SCORE_SECONDS);
+  g.beginPath();
+  g.strokeStyle = 'rgba(255,255,255,0.8)';
+  g.lineWidth = 1;
+  let first = true;
+  for (const e of score) {
+    const x = xAt(e.t);
+    if (e.type === 'kick') {
+      const s = 3 + 4 * e.v;
+      g.fillStyle = theme.accent;
+      g.fillRect(x - s / 2, top + rowH * 0.5 - s / 2, s, s);
+    } else if (e.type === 'snare') {
+      g.fillStyle = '#fff';
+      g.fillRect(x, top + rowH + 1, 1, rowH - 2);
+    } else if (e.type === 'hat') {
+      g.fillStyle = 'rgba(255,255,255,0.8)';
+      g.fillRect(x - 1, top + rowH * 2 + rowH / 2 - 1, 2, 2);
+    } else {
+      // Tone row: 0 (dark) at the bottom of the row band
+      const y = top + rowH * 4 - 1 - e.v * (rowH * 1.6);
+      if (first) g.moveTo(x, y);
+      else g.lineTo(x, y);
+      first = false;
+    }
+  }
+  g.stroke();
+}
+
 /** Paint: the walk drawn over the canvas as a light web, plus the current grain. */
 function drawPaintOverlay(g: CanvasRenderingContext2D, W: number, H: number) {
   const [cx, cy] = renderer.cover();
   const toX = (u: number) => (0.5 + (u - 0.5) / cx) * W;
   const toY = (v: number) => (1 - (0.5 + (v - 0.5) / cy)) * H;
   const wk = painter.walker;
+  drawMarks(g, W, H);
+  if (W > 360 && hasPlayed) drawScore(g, W, H);
   if (!wk.started) return;
   drawTrail(g, wk, toX, toY, '#ffffff', 0.55);
   g.strokeStyle = theme.accent;
@@ -1049,7 +1210,10 @@ function drawMeter() {
   $('v-low').textContent = pct(F.low);
   $('v-mid').textContent = pct(F.mid);
   $('v-high').textContent = pct(F.high);
-  $('v-hit').classList.toggle('on', F.pulse > 0.3);
+  $('v-kick').classList.toggle('on', F.kickPulse > 0.25);
+  $('v-snare').classList.toggle('on', F.snarePulse > 0.25);
+  $('v-hat').classList.toggle('on', F.hatPulse > 0.25);
+  $('v-energy').style.width = F.energy * 100 + '%';
   $('v-note').textContent = F.note;
   $('v-hz').textContent = F.pitchHz ? String(Math.round(F.pitchHz)) : '0';
   $('v-tone').style.left = activeWalker().toneFor(F, params) * 100 + '%';
@@ -1116,6 +1280,7 @@ function updateTransport() {
 function refreshEmpty() {
   $('step-src').classList.toggle('done', hasSource());
   $('step-snd').classList.toggle('done', audio.mode !== 'none');
+  $('empty').classList.toggle('ready', hasSource() && audio.mode !== 'none');
   $('step-go').classList.toggle('done', hasPlayed);
   $('empty').classList.toggle('hidden', hasPlayed && hasSource());
   refreshCursor();
@@ -1190,7 +1355,10 @@ function frame(now: number) {
       tone,
     });
     renderer.paint(painter.segs, painter.count, INK[params.ink]);
+    const now = performance.now() / 1000;
+    for (const m of painter.marks) liveMarks.push({ ...m, t: now });
   }
+  recordScore(audio.features, audio.playing);
   const grain = paint ? `Grain ${painter.cell}px` : '';
   if (mGrain.textContent !== grain) mGrain.textContent = grain;
 
@@ -1250,7 +1418,11 @@ configureOutput();
 onSourceChanged();
 refreshEmpty();
 requestAnimationFrame(frame);
+loadDefaults();
 
 // First interaction unlocks audio
 window.addEventListener('pointerdown', () => audio.resume(), { once: true });
 window.addEventListener('keydown', () => audio.resume(), { once: true });
+
+// Dev-only handle for test scripts
+if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__vs = { audio, painter, params, scanner, renderer };

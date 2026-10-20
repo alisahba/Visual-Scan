@@ -44,7 +44,7 @@ export class Walker {
 
   /** Map the current pitch to a target tone rank (0 = darkest pixel, 1 = brightest). */
   toneFor(F: Features, p: Params): number {
-    let t = p.invert ? F.pitch : 1 - F.pitch;
+    let t = p.invert ? F.tone : 1 - F.tone;
     t = 0.5 + (t - 0.5) * (1 + 3 * p.contrast);
     return Math.max(0, Math.min(1, t));
   }
@@ -76,8 +76,8 @@ export class Walker {
     // Curl: the walk keeps turning, so lines between picks become rotating
     // chords. Rising pitch swerves one way, falling the other. Hits flip the
     // curl and kick the heading.
-    const dp = F.pitch - this.lastPitch;
-    this.lastPitch = F.pitch;
+    const dp = F.tone - this.lastPitch;
+    this.lastPitch = F.tone;
     let a = this.curlSign * p.curl * 0.35 + dp * 3 * p.curl;
     if (turn) {
       this.curlSign = -this.curlSign;
@@ -95,7 +95,7 @@ export class Walker {
     const tone = this.toneFor(F, p);
     const diag = Math.hypot(T.w, T.h);
     // Cubic so the low end (small, coherent steps) gets most of the slider
-    let reach = diag * (0.002 + 0.4 * p.reach ** 3) * (0.3 + 1.4 * F.level);
+    let reach = diag * (0.002 + 0.4 * p.reach ** 3) * (0.3 + 1.4 * F.energy);
     if (opts.minReach) reach = Math.max(reach, opts.minReach);
     const tolerance = 0.01 + 0.2 * p.tolerance * p.tolerance;
     const [x, y, jumped] = T.pick(tone, tolerance, px, py, hx, hy, reach, p.momentum, p.wander, opts.explore ?? 0, opts.cover);

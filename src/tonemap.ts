@@ -13,8 +13,14 @@ export class ToneMap {
   private canvas = document.createElement('canvas');
   private g: CanvasRenderingContext2D;
   private hist = new Uint32Array(256);
-  /** Tone rank of each brightness level (0 = darkest pixel, 1 = brightest). */
+  /**
+   * Tone rank of each brightness level, 0..1. Levels are weighted by the square
+   * root of their pixel count, so a big flat background (a black backdrop) takes
+   * a small share of the scale instead of half of it.
+   */
   readonly rank = new Float32Array(256);
+  /** Start of each level's run in `order`. */
+  private levelStart = new Uint32Array(257);
 
   constructor() {
     this.g = this.canvas.getContext('2d', { willReadFrequently: true })!;
@@ -43,13 +49,20 @@ export class ToneMap {
       this.lum[i] = l;
       hist[l]++;
     }
+    let wsum = 0;
+    for (let l = 0; l < 256; l++) wsum += Math.sqrt(hist[l]);
     let acc = 0;
+    let wacc = 0;
     for (let l = 0; l < 256; l++) {
       const c = hist[l];
-      this.rank[l] = (acc + c / 2) / n;
+      const w = Math.sqrt(c);
+      this.rank[l] = wsum > 0 ? (wacc + w / 2) / wsum : l / 255;
+      wacc += w;
+      this.levelStart[l] = acc;
       hist[l] = acc;
       acc += c;
     }
+    this.levelStart[256] = acc;
     for (let i = 0; i < n; i++) this.order[hist[this.lum[i]]++] = i;
     this.w = w;
     this.h = h;
@@ -107,15 +120,33 @@ export class ToneMap {
       return [(best % this.w) + 0.5, Math.floor(best / this.w) + 0.5, false];
     }
 
-    // Jump: sample the tone band across the whole image, prefer the nearest
-    // (and, when exploring, the least painted)
+    // Jump: sample the pixels whose levels sit in the tone band, prefer the
+    // nearest (and, when exploring, the least painted)
     const diag = Math.hypot(this.w, this.h);
-    const n = this.order.length;
-    const centre = Math.round(Math.max(0, Math.min(1, tone)) * (n - 1));
-    const half = Math.max(8, Math.round(n * tolerance));
-    const lo = Math.max(0, centre - half);
-    const hi = Math.min(n, centre + half + 1);
+    let l0 = 256;
+    let l1 = -1;
+    let nearest = 0;
+    let nearestErr = 2;
+    for (let l = 0; l < 256; l++) {
+      if (this.levelStart[l + 1] === this.levelStart[l]) continue;
+      const e = Math.abs(this.rank[l] - tone);
+      if (e < nearestErr) {
+        nearestErr = e;
+        nearest = l;
+      }
+      if (e <= tolerance) {
+        if (l < l0) l0 = l;
+        if (l > l1) l1 = l;
+      }
+    }
+    if (l1 < 0) {
+      l0 = nearest;
+      l1 = nearest;
+    }
+    const lo = this.levelStart[l0];
+    const hi = this.levelStart[l1 + 1];
     const count = hi - lo;
+    if (count <= 0) return [px, py, false];
     const K = Math.min(count, 400);
     const stride = count / K;
     const off = Math.random() * stride;

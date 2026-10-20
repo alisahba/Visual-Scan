@@ -223,7 +223,7 @@ void main() {
 export const STROKE_VERT = /* glsl */ `#version 300 es
 layout(location = 0) in vec4 aPQ;   // P.xy, Q.xy in canvas px
 layout(location = 1) in vec4 aUV;   // P.uv, Q.uv in the source
-layout(location = 2) in vec2 aWC;   // half width px, cell px
+layout(location = 2) in vec2 aWC;   // half width px (negative = square block of that half size), cell px
 uniform vec2 uRes;
 out vec2 vPos;
 flat out vec4 vPQ;
@@ -238,7 +238,7 @@ void main() {
   float L = length(d);
   vec2 dir = L > 1e-4 ? d / L : vec2(1.0, 0.0);
   vec2 nrm = vec2(-dir.y, dir.x);
-  float pad = aWC.x + aWC.y * 1.5;
+  float pad = abs(aWC.x) + aWC.y * 1.5;
   vec2 pos = mix(P - dir * pad, Q + dir * pad, k.x) + nrm * pad * (k.y * 2.0 - 1.0);
   vPos = pos;
   vPQ = aPQ;
@@ -271,8 +271,14 @@ void main() {
   vec2 pq = Q - P;
   float L2 = dot(pq, pq);
   float t = L2 > 1e-6 ? clamp(dot(cc - P, pq) / L2, 0.0, 1.0) : 0.0;
-  float d = length(cc - (P + pq * t));
-  if (d > max(vWC.x, cell * 0.72)) discard;
+  if (vWC.x < 0.0) {
+    // Square block (kick stamps, hat sparks)
+    vec2 o = abs(cc - P);
+    if (max(o.x, o.y) > max(-vWC.x, cell * 0.5)) discard;
+  } else {
+    float d = length(cc - (P + pq * t));
+    if (d > max(vWC.x, cell * 0.72)) discard;
+  }
 
   // Sample at the grain's scale: big cells take the average colour of their area
   float lod = log2(max(cell * uSrcPerPx, 1.0));

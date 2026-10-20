@@ -14,6 +14,14 @@ export const SEG_FLOATS = 10;
 const MAX_SEGS = 4096;
 const GRID = 56;
 
+/** A hit drawn this frame, for the overlay's markers and score. */
+export interface HitMark {
+  type: 'kick' | 'snare' | 'hat';
+  x: number; // canvas px (y up)
+  y: number;
+  size: number;
+}
+
 export interface PaintContext {
   dt: number;
   /** 0..1 through the current pass (track, or one loop). */
@@ -31,6 +39,7 @@ export class Painter {
   readonly walker = new Walker();
   readonly segs = new Float32Array(MAX_SEGS * SEG_FLOATS);
   count = 0;
+  readonly marks: HitMark[] = [];
   /** Current grain in canvas pixels (power of two). */
   cell = 64;
   private budget = 0;
@@ -115,22 +124,46 @@ export class Painter {
     return (len + 2 * half) * 2 * half;
   }
 
-  /** Plan this frame's strokes. Read `segs`/`count` afterwards. */
+  /** A square block (kick stamp or hat spark) centred on a pick. */
+  private addBlock(u: number, v: number, size: number, cell: number, c: PaintContext): number {
+    if (this.count >= MAX_SEGS) return 0;
+    const [x, y] = this.toCanvas(u, v, c);
+    const o = this.count * SEG_FLOATS;
+    const S = this.segs;
+    S[o] = x;
+    S[o + 1] = y;
+    S[o + 2] = x;
+    S[o + 3] = y;
+    S[o + 4] = u;
+    S[o + 5] = v;
+    S[o + 6] = u;
+    S[o + 7] = v;
+    S[o + 8] = -size / 2;
+    S[o + 9] = cell;
+    this.count++;
+    this.markCoverage(x, y, x, y, size / 2, c);
+    return size * size;
+  }
+
+  private mark(type: HitMark['type'], u: number, v: number, size: number, c: PaintContext) {
+    const [x, y] = this.toCanvas(u, v, c);
+    this.marks.push({ type, x, y, size });
+  }
+
+  /** Plan this frame's strokes. Read `segs`/`count` and `marks` afterwards. */
   update(F: Features, p: Params, c: PaintContext) {
     this.count = 0;
+    this.marks.length = 0;
     this.ctx = c;
     this.setGrid(c.outW, c.outH);
     const scale = Math.max(c.outW, c.outH) / 1920;
+    const short = Math.min(c.outW, c.outH);
 
-    // Grain: coarse -> fine over the pass, in power-of-two levels.
-    // Bass hits push it back up for a moment (big pixels on the kick).
+    // Grain: coarse -> fine over the pass, in power-of-two levels
     const lc = p.coarse + Math.log2(scale);
     const lf = Math.min(lc, p.fine + Math.log2(scale));
     const ease = Math.pow(Math.max(0, Math.min(1, c.progress)), 0.85);
-    let lg = lc + (lf - lc) * ease;
-    lg += p.pulse * 6 * Math.max(0, F.low - F.lowSlow);
-    lg = Math.min(lg, lc);
-    const cell = Math.max(1, 2 ** Math.round(lg));
+    const cell = Math.max(1, 2 ** Math.round(lc + (lf - lc) * ease));
     this.cell = cell;
 
     // Slowly forget coverage so the walk can come back to places
@@ -139,38 +172,65 @@ export class Painter {
 
     if (!c.playing || !c.tone.ready) return;
 
-    // Area budget: cover the canvas about (density) times per pass, faster when loud
-    const rate = (c.outW * c.outH * (0.3 + p.density * 2.2)) / Math.max(4, c.passSeconds);
-    this.budget += rate * c.dt * (0.2 + 1.6 * F.level);
-    this.budget = Math.min(this.budget, rate * 0.5);
-
     const T = c.tone;
     const toTone = (c.cover[0] * T.w) / c.outW; // canvas px -> tone-map px
     const W = this.walker;
-    let turn = F.onset;
-    let first = true;
+    const walk = { explore: p.explore, cover: this.coverAt };
+
+    // Hits first, each with its own mark, so they read in time with the music.
+    // Their area comes out of the budget: the line pauses briefly after a big hit.
+    if (F.kick && p.kick > 0) {
+      // Kick: a bold leap across the image and a solid block where it lands
+      const s = F.kick;
+      if (W.step(F, p, T, true, { ...walk, minReach: short * (0.08 + 0.2 * p.kick) * toTone })) {
+        this.budget -= this.addSeg(W.pu, W.pv, W.u, W.v, Math.max(2 * scale, cell * (0.9 + 1.6 * p.kick * s)), cell, c);
+        // Kicks keep a readable size even once the grain is fine
+        const floor = short * (0.015 + 0.05 * p.kick * (0.5 + s));
+        const size = Math.min(short * 0.28, Math.max(floor, cell * (1.5 + 3.5 * p.kick * s)));
+        this.budget -= this.addBlock(W.u, W.v, size, cell, c);
+        this.mark('kick', W.u, W.v, size, c);
+      }
+    }
+    if (F.snare && p.snare > 0 && W.started) {
+      // Snare: a fan of thin lines out of the current pixel
+      const n = Math.round(2 + 6 * p.snare * F.snare);
+      const qu = W.u;
+      const qv = W.v;
+      for (let k = 0; k < n; k++) {
+        const ang = (k / n) * Math.PI * 2 + Math.random() * 0.6;
+        W.step(F, p, T, false, { minReach: cell * (4 + 14 * p.snare) * toTone, heading: [Math.cos(ang), Math.sin(ang)] });
+        this.budget -= this.addSeg(qu, qv, W.u, W.v, Math.max(1, cell * 0.72), Math.max(1, cell / 2), c);
+        W.restore(qu, qv);
+      }
+      this.mark('snare', qu, qv, cell * (4 + 14 * p.snare), c);
+    }
+    if (F.hat && p.hat > 0 && W.started) {
+      // Hat: sparks of single pixels of the same tone, scattered nearby
+      const n = Math.round(2 + 8 * p.hat * F.hat);
+      const qu = W.u;
+      const qv = W.v;
+      const dot = Math.max(4 * scale, cell * 0.5);
+      for (let k = 0; k < n; k++) {
+        const ang = Math.random() * Math.PI * 2;
+        W.step(F, p, T, false, { minReach: Math.max(dot * 3, cell * 3) * toTone, heading: [Math.cos(ang), Math.sin(ang)] });
+        this.budget -= this.addBlock(W.u, W.v, dot, Math.max(1, dot), c);
+        W.restore(qu, qv);
+      }
+      this.mark('hat', qu, qv, dot * 6, c);
+    }
+
+    // The line: steps at a rate set by energy, so it rests in breakdowns and
+    // races in drops. Covers the canvas about (density) times per pass.
+    const rate = (c.outW * c.outH * (0.2 + p.density * 1.6)) / Math.max(4, c.passSeconds);
+    const drive = Math.max(0, F.energy - 0.2) / 0.3; // ~1 at average loudness
+    this.budget += rate * c.dt * drive * drive;
+    this.budget = Math.max(-rate * 2, Math.min(this.budget, rate * 0.5));
     let steps = 0;
     while (this.budget > 0 && steps < 600 && this.count < MAX_SEGS - 16) {
       steps++;
-      const half = cell * (0.72 + p.weight * 4 * F.level);
-      const ok = W.step(F, p, T, turn, { minReach: cell * 2 * toTone, explore: p.explore, cover: this.coverAt });
-      if (!ok) break;
-      turn = false;
+      const half = cell * (0.72 + p.weight * 2.5 * Math.max(0, F.energy - 0.3));
+      if (!W.step(F, p, T, false, { ...walk, minReach: cell * 2 * toTone })) break;
       this.budget -= Math.max(cell * cell, this.addSeg(W.pu, W.pv, W.u, W.v, half, cell, c));
-
-      // Hits throw out a fan of thin strokes from the new pick
-      if (first && F.onset && p.burst > 0) {
-        const n = Math.round(1 + p.burst * (2 + 5 * F.onsetStrength));
-        const qu = W.u;
-        const qv = W.v;
-        for (let k = 0; k < n; k++) {
-          const ang = Math.random() * Math.PI * 2;
-          W.step(F, p, T, false, { minReach: cell * (3 + 10 * p.burst) * toTone, heading: [Math.cos(ang), Math.sin(ang)] });
-          this.addSeg(qu, qv, W.u, W.v, Math.max(1, cell * 0.72), Math.max(1, cell / 2), c);
-          W.restore(qu, qv);
-        }
-      }
-      first = false;
     }
   }
 }

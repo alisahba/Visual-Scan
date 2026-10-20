@@ -26,9 +26,16 @@ All three map sound to the image. Paint is the default.
 3. A walker picks a nearby pixel of that tone and joins it to the last pick with a
    stroke. Strokes snap to a pixel grid that starts coarse (big pixels) and halves
    step by step to fine detail over the pass.
-4. Painting is budgeted by area, so the image is used up steadily across the
-   track. The walk favours parts it hasn't painted, loudness thickens strokes,
-   bass hits bring the big pixels back, and other hits throw out fans of lines.
+4. The line moves with the track's energy (loudness against its own recent
+   average): it rests in breakdowns and races in drops. The walk favours parts it
+   hasn't painted.
+5. Each kind of hit leaves its own mark: **kick** = a leap and a solid block,
+   **snare** = a fan of lines, **hi-hat** = sparks of same-tone pixels. With Guides
+   on, hits are outlined where they land and a strip at the bottom shows the last
+   8 seconds of kicks, snares, hats and tone.
+
+Tones are ranked by the image's range of values (weighted by the square root of
+pixel counts), so a big flat background doesn't swallow half the notes.
 
 Ink: **Colour** (gradient between the two picked pixels), **Clone** (the stroke
 carries a strip of the image from where the walk just was), **Smear** (drags
@@ -40,10 +47,18 @@ where the walk is now to where it has been.
 **Scan**. Slit-scan: a slit crosses the image and the sound moves, bends and
 stretches it.
 
+## Default media
+
+On startup the app loads `public/demo/daffodil.jpg` and `public/demo/acid-dream.mp3`
+if they exist. They are third-party files, so `public/demo/` is gitignored and
+not part of the public build; without them the demo button renders a synthesised
+track instead.
+
 ## Everything else
 
 - Canvas: one pass per track (completes when the song ends) or loop
 - Drag the canvas: seek (pass) or scratch-paint with the head (loop)
 - Export: PNG and video with audio
-- Keys: Space play · E engine · C clear · S PNG · R record · F perform · 1–4 presets
+- Panel: drag its edge to resize (double-click resets), P hides it, section headers fold
+- Keys: Space play · E engine · C clear · S PNG · R record · F perform · P panel · 1–4 presets
 - Built-in demo: a drawn image and a synthesised 60-second track
