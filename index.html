@@ -16,7 +16,7 @@
         <div class="brand">
           <span class="logo" aria-hidden="true"></span>
           <strong>Visual Scan</strong>
-          <span class="sub">Slit-scan visualiser</span>
+          <span class="sub">Image, played by sound</span>
         </div>
         <div class="meta">
           <span id="m-res">—</span>
@@ -77,13 +77,23 @@
             <span>High <b id="v-high">00</b></span>
             <span class="hit" id="v-hit">Hit</span>
           </div>
+          <div class="pitch">
+            <span>Pitch <b id="v-note">—</b></span>
+            <span><b id="v-hz">0</b> Hz</span>
+            <span class="tone-scale" aria-hidden="true"><i id="v-tone"></i></span>
+          </div>
           <div id="gain-row"></div>
           <input type="file" id="f-track" accept="audio/*" hidden />
         </section>
 
-        <!-- 03 Scan -->
+        <!-- 03 Engine -->
         <section class="sec">
-          <header class="sec-h"><span class="n">03</span><h2>Scan</h2><button type="button" class="link" id="b-reset">Reset</button></header>
+          <header class="sec-h"><span class="n">03</span><h2>Engine</h2><button type="button" class="link" id="b-reset">Reset</button></header>
+          <div class="seg" id="seg-engine">
+            <button type="button" data-v="map" title="Pitch picks pixels by tone; columns thread through them">Map</button>
+            <button type="button" data-v="scan" title="Slit-scan: the slit is bent and moved by the sound">Scan</button>
+          </div>
+          <p class="note" id="engine-note"></p>
           <div class="field">
             <span class="lbl">Axis</span>
             <div class="seg" id="seg-axis">
@@ -97,7 +107,15 @@
             <div class="seg" id="seg-preset"></div>
           </div>
           <div id="loop-row"></div>
-          <div class="sliders" id="sliders"></div>
+          <div class="sliders" id="sliders-map"></div>
+          <div class="field" id="invert-row">
+            <span class="lbl">Notes</span>
+            <div class="seg" id="seg-invert">
+              <button type="button" data-v="0">High = dark</button>
+              <button type="button" data-v="1">High = light</button>
+            </div>
+          </div>
+          <div class="sliders" id="sliders-scan"></div>
         </section>
 
         <!-- 04 Output -->
@@ -153,6 +171,7 @@
           <span><kbd>R</kbd> Record</span>
           <span><kbd>F</kbd> Perform</span>
           <span><kbd>1–4</kbd> Presets</span>
+          <span><kbd>E</kbd> Engine</span>
         </footer>
       </aside>
 

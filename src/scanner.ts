@@ -27,6 +27,8 @@ export class Scanner {
   from = 0;
   to = 0;
   private reverse = false;
+  /** Columns actually swept this frame, in sweep order (for the map engine). */
+  swept: number[] = [];
   /** Current slit position in the source (0..1), after all modulation. */
   sx = 0;
   scale = 1;
@@ -192,6 +194,19 @@ export class Scanner {
       for (let i = i0; i < n; i++) cols.push(i);
       for (let i = 0; i <= i1; i++) cols.push(i);
     }
+    // Newly entered columns only: each one gets exactly one map step
+    const sw: number[] = [];
+    if (this.to !== this.from) {
+      const a = Math.min(n - 1, Math.floor(this.from * n));
+      const b = Math.min(n - 1, Math.floor(this.to * n));
+      if (b > a) for (let i = a + 1; i <= b; i++) sw.push(i);
+      else if (b < a) {
+        for (let i = a + 1; i < n; i++) sw.push(i);
+        for (let i = 0; i <= b; i++) sw.push(i);
+      }
+    }
+    if (this.reverse) sw.reverse();
+    this.swept = sw;
     // When idle, keep the column under the head live so slider tweaks show
     if (!playing && cols.length === 0) cols.push(i1);
     const L = this.last;

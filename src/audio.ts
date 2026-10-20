@@ -15,6 +15,13 @@ export interface Features {
   onset: boolean; // a hit landed this frame
   onsetStrength: number;
   pulse: number; // decaying flash after a hit
+  /** Detected pitch in Hz (the note when there is one, else spectral centroid). */
+  pitchHz: number;
+  /** How tonal the frame is, 0..1. */
+  clarity: number;
+  /** Pitch normalised to the recent range: 0 = lowest, 1 = highest. */
+  pitch: number;
+  note: string;
 }
 
 export type AudioMode = 'none' | 'file' | 'mic';
@@ -61,6 +68,10 @@ export class AudioEngine {
     onset: false,
     onsetStrength: 0,
     pulse: 0,
+    pitchHz: 0,
+    clarity: 0,
+    pitch: 0.5,
+    note: '—',
   };
 
   private freq: Float32Array<ArrayBuffer>;
@@ -77,6 +88,11 @@ export class AudioEngine {
   private fluxIdx = 0;
   private lastOnset = 0;
   private clock = 0;
+  private yinBuf = new Float32Array(1024);
+  private yinDiff = new Float32Array(600);
+  private logPitch = Math.log2(220);
+  private rangeLo = Math.log2(80);
+  private rangeHi = Math.log2(2000);
 
   constructor() {
     this.ctx = new AudioContext({ latencyHint: 'interactive' });
@@ -383,7 +399,98 @@ export class AudioEngine {
       F.pulse = Math.max(F.pulse, 0.35 + 0.65 * F.onsetStrength);
     }
     F.pulse *= Math.exp(-dt / 0.16);
+
+    this.updatePitch(dt, active);
   }
+
+  /**
+   * Pitch: YIN on the waveform finds the note. When the frame isn't tonal
+   * (drums, noise), fall back to the spectral centroid, so kicks read low and
+   * hi-hats read high. Normalised to an adaptive range so any track uses the
+   * full tonal scale.
+   */
+  private updatePitch(dt: number, active: boolean) {
+    const F = this.features;
+    if (!active || F.level < 0.04) {
+      F.clarity *= Math.exp(-dt / 0.2);
+      return;
+    }
+    const sr = this.ctx.sampleRate / 2;
+    const x = this.yinBuf;
+    const n = x.length;
+    for (let i = 0; i < n; i++) x[i] = 0.5 * (this.time[i * 2] + this.time[i * 2 + 1]);
+    const tauMin = Math.max(2, Math.floor(sr / 1400));
+    const tauMax = Math.min(this.yinDiff.length - 1, Math.floor(sr / 45), n >> 1);
+    const W = n - tauMax;
+    const d = this.yinDiff;
+    d[0] = 1;
+    let running = 0;
+    let found = -1;
+    for (let tau = 1; tau <= tauMax; tau++) {
+      let s = 0;
+      for (let i = 0; i < W; i++) {
+        const v = x[i] - x[i + tau];
+        s += v * v;
+      }
+      running += s;
+      d[tau] = running > 0 ? (s * tau) / running : 1;
+      if (found < 0 && tau > tauMin && d[tau] < 0.15 && d[tau] < d[tau - 1]) {
+        // keep descending to the local minimum
+        found = tau;
+      } else if (found > 0 && tau === found + 1 && d[tau] < d[found]) {
+        found = tau;
+      }
+    }
+    let best = found;
+    if (best < 0) {
+      let m = 1;
+      for (let tau = tauMin; tau <= tauMax; tau++) if (d[tau] < m) { m = d[tau]; best = tau; }
+    }
+    let yinHz = 0;
+    let clarity = 0;
+    if (best > 0 && best < tauMax) {
+      const a = d[best - 1];
+      const b = d[best];
+      const c = d[best + 1];
+      const den = a - 2 * b + c;
+      const shift = den !== 0 ? (0.5 * (a - c)) / den : 0;
+      yinHz = sr / (best + Math.max(-1, Math.min(1, shift)));
+      clarity = Math.max(0, Math.min(1, 1 - b));
+    }
+
+    // Spectral centroid (log domain) as the fallback
+    const binHz = this.ctx.sampleRate / this.analyser.fftSize;
+    let num = 0;
+    let den = 0;
+    const hi = Math.min(this.freq.length, Math.floor(10000 / binHz));
+    for (let i = Math.ceil(50 / binHz); i < hi; i++) {
+      const m = dbToMag(this.freq[i]);
+      num += m * Math.log2(i * binHz);
+      den += m;
+    }
+    const centroidLog = den > 0 ? num / den : this.logPitch;
+
+    const tonal = clarity > 0.55 && yinHz > 40;
+    const target = tonal ? Math.log2(yinHz) : centroidLog;
+    this.logPitch += (target - this.logPitch) * (1 - Math.exp(-dt / 0.03));
+    F.pitchHz = Math.pow(2, this.logPitch);
+    F.clarity += (clarity - F.clarity) * (1 - Math.exp(-dt / 0.08));
+    F.note = tonal ? noteName(yinHz) : '—';
+
+    // Adaptive range: edges snap out quickly, drift back in slowly
+    const lp = this.logPitch;
+    this.rangeLo = lp < this.rangeLo ? lp : this.rangeLo + (lp - this.rangeLo) * (1 - Math.exp(-dt / 12));
+    this.rangeHi = lp > this.rangeHi ? lp : this.rangeHi + (lp - this.rangeHi) * (1 - Math.exp(-dt / 12));
+    const span = Math.max(1.5, this.rangeHi - this.rangeLo);
+    const mid = (this.rangeHi + this.rangeLo) / 2;
+    F.pitch = clamp01((lp - (mid - span / 2)) / span);
+  }
+}
+
+const NOTES = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'B'];
+function noteName(hz: number): string {
+  const m = Math.round(69 + 12 * Math.log2(hz / 440));
+  return NOTES[((m % 12) + 12) % 12] + (Math.floor(m / 12) - 1);
 }
 
 function dbToMag(db: number): number {

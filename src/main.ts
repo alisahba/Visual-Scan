@@ -4,11 +4,12 @@ import './style.css';
 import { AudioEngine } from './audio';
 import { SourceManager } from './source';
 import { Scanner } from './scanner';
+import { Threader } from './thread';
 import { Renderer, SPEC_BANDS } from './renderer';
 import { Recorder, download, stamp } from './exporter';
 import { demoImage, demoTrack } from './demo';
 import {
-  DEFAULTS, DUOS, GAIN_SLIDER, LOOP_SLIDER, PRESETS, SCAN_SLIDERS,
+  DEFAULTS, DUOS, GAIN_SLIDER, LOOP_SLIDER, MAP_PRESETS, MAP_SLIDERS, SCAN_PRESETS, SCAN_SLIDERS,
   hexToRgb, loadParams, outputSize, saveParams,
   type Params, type NumKey,
 } from './state';
@@ -30,6 +31,7 @@ try {
 const audio = new AudioEngine();
 const source = new SourceManager();
 const scanner = new Scanner();
+const threader = new Threader();
 const recorder = new Recorder();
 
 const AXIS = { horizontal: 0, vertical: 1, radial: 2 } as const;
@@ -127,12 +129,14 @@ new ResizeObserver(layoutFrame).observe($('stage'));
 // ───────── Parameters → UI ─────────
 
 const sliders = new Map<NumKey, Slider>();
+const presetsFor = () => (params.engine === 'map' ? MAP_PRESETS : SCAN_PRESETS);
+const slidersFor = () => (params.engine === 'map' ? MAP_SLIDERS : SCAN_SLIDERS);
 
 function setParam<K extends keyof Params>(k: K, v: Params[K], fromPreset = false) {
   params[k] = v;
   saveParams(params);
-  if (!fromPreset && k in PRESETS[0].values) {
-    presetSeg.set('');
+  if (!fromPreset && presetsFor().some((p) => k in p.values)) {
+    presetHost.querySelectorAll('button').forEach((b) => b.classList.remove('on'));
   }
   if (k === 'axis' || k === 'format' || k === 'size') configureOutput();
   if (k === 'axis') {
@@ -143,11 +147,19 @@ function setParam<K extends keyof Params>(k: K, v: Params[K], fromPreset = false
   if (k === 'colour') refreshColour();
 }
 
-const sliderHost = $('sliders');
-for (const def of SCAN_SLIDERS) {
+const mapHost = $('sliders-map');
+const scanHost = $('sliders-scan');
+for (const def of [...MAP_SLIDERS, ...SCAN_SLIDERS]) {
+  const host = MAP_SLIDERS.includes(def) ? mapHost : scanHost;
+  if (def.group) {
+    const h = document.createElement('div');
+    h.className = 'group';
+    h.textContent = def.group;
+    host.append(h);
+  }
   const s = slider(def, params[def.key], (v) => setParam(def.key, v));
   sliders.set(def.key, s);
-  sliderHost.append(s.el);
+  host.append(s.el);
 }
 const loopSlider = slider(LOOP_SLIDER, params.loopSeconds, (v) => setParam('loopSeconds', v));
 sliders.set('loopSeconds', loopSlider);
@@ -162,38 +174,68 @@ const axisSeg = seg($('seg-axis'), params.axis, (v) => {
 });
 $('preview').classList.toggle('vertical', params.axis === 'vertical');
 
-// Presets
-const presetHost = $('seg-preset');
-PRESETS.forEach((p, i) => {
-  const b = document.createElement('button');
-  b.type = 'button';
-  b.dataset.v = String(i);
-  b.textContent = p.name;
-  b.title = `Preset ${i + 1}`;
-  presetHost.append(b);
+const invertSeg = seg($('seg-invert'), params.invert ? '1' : '0', (v) => {
+  setParam('invert', v === '1');
+  invertSeg.set(v);
 });
-const presetSeg = seg(presetHost, '', (v) => applyPreset(Number(v)));
+
+// Presets (per engine)
+const presetHost = $('seg-preset');
+function buildPresets() {
+  presetHost.innerHTML = '';
+  presetsFor().forEach((p, i) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.dataset.v = String(i);
+    b.textContent = p.name;
+    b.title = `Preset ${i + 1}`;
+    b.addEventListener('click', () => applyPreset(i));
+    presetHost.append(b);
+  });
+}
 
 function applyPreset(i: number) {
-  const p = PRESETS[i];
+  const p = presetsFor()[i];
   if (!p) return;
   for (const [k, v] of Object.entries(p.values) as [keyof Params, never][]) {
     setParam(k, v, true);
     sliders.get(k as NumKey)?.set(v as number);
   }
   axisSeg.set(params.axis);
-  presetSeg.set(String(i));
+  presetHost.querySelectorAll('button').forEach((b, j) => b.classList.toggle('on', j === i));
   toast(`Preset: ${p.name}`);
 }
 
+// Engine: Map (pitch picks pixels by tone) or Scan (slit-scan)
+const ENGINE_NOTE = {
+  map: 'Each note picks a pixel of matching tone. High notes take dark pixels, low notes light. Every column is the image along the thread between picks.',
+  scan: 'A slit crosses the image. The sound moves it, bends it and stretches it.',
+};
+const engineSeg = seg($('seg-engine'), params.engine, (v) => setEngine(v as Params['engine']));
+function setEngine(e: Params['engine']) {
+  setParam('engine', e);
+  engineSeg.set(e);
+  mapHost.hidden = e !== 'map';
+  $('invert-row').hidden = e !== 'map';
+  scanHost.hidden = e !== 'scan';
+  $('engine-note').textContent = ENGINE_NOTE[e];
+  $('src-note').textContent = e === 'map' ? 'Drag on the image to move the thread.' : 'Drag across the image to steer the slit.';
+  buildPresets();
+}
+setEngine(params.engine);
+
 $('b-reset').addEventListener('click', () => {
-  for (const def of SCAN_SLIDERS) {
+  for (const def of slidersFor()) {
     setParam(def.key, DEFAULTS[def.key]);
     sliders.get(def.key)?.set(DEFAULTS[def.key]);
   }
+  if (params.engine === 'map') {
+    setParam('invert', DEFAULTS.invert);
+    invertSeg.set(DEFAULTS.invert ? '1' : '0');
+  }
   setParam('axis', DEFAULTS.axis);
   axisSeg.set(DEFAULTS.axis);
-  toast('Scan settings reset.');
+  toast('Engine settings reset.');
 });
 
 // Fill (pass / loop)
@@ -577,6 +619,7 @@ window.addEventListener('keydown', (e) => {
   else if (k === 'f') togglePerform();
   else if (k === 'escape' && document.body.classList.contains('perform')) togglePerform(false);
   else if (['1', '2', '3', '4'].includes(k)) applyPreset(Number(k) - 1);
+  else if (k === 'e') setEngine(params.engine === 'map' ? 'scan' : 'map');
   else if (k === 'h') {
     setParam('head', !params.head);
     headToggle.checked = params.head;
@@ -589,16 +632,18 @@ document.addEventListener('click', (e) => {
   if (b && e.detail > 0) b.blur();
 });
 
-// ───────── Steering the slit from the preview ─────────
+// ───────── Steering from the preview ─────────
+// Map: drag to move the thread. Scan: drag to steer the slit.
 
 const pc = $<HTMLCanvasElement>('src-canvas');
 let previewRect = { ox: 0, oy: 0, w: 1, h: 1 };
+const clamp01 = (x: number) => Math.max(0, Math.min(1, x));
 const steerFrom = (e: PointerEvent) => {
   const r = pc.getBoundingClientRect();
-  const v = params.axis === 'vertical'
-    ? (e.clientY - r.top - previewRect.oy) / previewRect.h
-    : (e.clientX - r.left - previewRect.ox) / previewRect.w;
-  scanner.steer(v);
+  const fx = (e.clientX - r.left - previewRect.ox) / previewRect.w;
+  const fy = (e.clientY - r.top - previewRect.oy) / previewRect.h;
+  if (params.engine === 'map') threader.steer([clamp01(source.flipX ? 1 - fx : fx), clamp01(1 - fy)]);
+  else scanner.steer(params.axis === 'vertical' ? fy : fx);
 };
 pc.addEventListener('pointerdown', (e) => {
   if (!hasSource()) return;
@@ -608,7 +653,10 @@ pc.addEventListener('pointerdown', (e) => {
 pc.addEventListener('pointermove', (e) => {
   if (pc.hasPointerCapture(e.pointerId)) steerFrom(e);
 });
-const release = () => scanner.steer(null);
+const release = () => {
+  scanner.steer(null);
+  threader.steer(null);
+};
 pc.addEventListener('pointerup', release);
 pc.addEventListener('pointercancel', release);
 
@@ -757,6 +805,10 @@ function drawPreview() {
     g.drawImage(img, ox, oy, w, h);
     g.restore();
   }
+  if (params.engine === 'map') {
+    drawWalk(g, ox, oy, w, h);
+    return;
+  }
   // The slit, bent by the same displacement the shader uses
   g.strokeStyle = theme.accent;
   g.lineWidth = scanner.manualActive ? 2.5 : 1.5;
@@ -774,6 +826,53 @@ function drawPreview() {
     else g.lineTo(x, y);
   }
   g.stroke();
+}
+
+/** Map engine: the sound's walk through the image, and the current thread. */
+function drawWalk(g: CanvasRenderingContext2D, ox: number, oy: number, w: number, h: number) {
+  const toX = (u: number) => ox + (source.flipX ? 1 - u : u) * w;
+  const toY = (v: number) => oy + (1 - v) * h;
+  // Wash the image back so the walk reads
+  g.fillStyle = cssVar('--paper');
+  g.globalAlpha = 0.5;
+  g.fillRect(ox, oy, w, h);
+  g.globalAlpha = 1;
+
+  const T = threader.trail;
+  const n = threader.trailCount;
+  g.strokeStyle = theme.ink;
+  g.lineWidth = 0.75;
+  for (let k = 1; k < n; k++) {
+    const i1 = (threader.trailHead - (n - 1 - k) + T.length) % (T.length / 2);
+    const i0 = (i1 - 1 + T.length / 2) % (T.length / 2);
+    g.globalAlpha = (k / n) * 0.7;
+    g.beginPath();
+    g.moveTo(toX(T[i0 * 2]), toY(T[i0 * 2 + 1]));
+    g.lineTo(toX(T[i1 * 2]), toY(T[i1 * 2 + 1]));
+    g.stroke();
+  }
+  g.globalAlpha = 1;
+
+  // The line the newest column is sampling (same curve as the shader)
+  if (threader.hasDrawn) {
+    const D = threader.drawn;
+    const a = [D[0], D[1]];
+    const m = [D[2], D[3]];
+    const b = [D[4], D[5]];
+    const mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+    const c = [mid[0] + (2 * m[0] - mid[0] - mid[0]) * params.bend, mid[1] + (2 * m[1] - mid[1] - mid[1]) * params.bend];
+    g.strokeStyle = theme.accent;
+    g.lineWidth = 2;
+    g.beginPath();
+    g.moveTo(toX(a[0]), toY(a[1]));
+    g.quadraticCurveTo(toX(c[0]), toY(c[1]), toX(b[0]), toY(b[1]));
+    g.stroke();
+    g.fillStyle = theme.accent;
+    g.fillRect(toX(a[0]) - 2, toY(a[1]) - 2, 4, 4);
+  }
+  const [u, v] = threader.pos;
+  g.fillStyle = theme.accent;
+  g.fillRect(toX(u) - 3, toY(v) - 3, 6, 6);
 }
 
 function drawMeter() {
@@ -802,6 +901,9 @@ function drawMeter() {
   $('v-mid').textContent = pct(F.mid);
   $('v-high').textContent = pct(F.high);
   $('v-hit').classList.toggle('on', F.pulse > 0.3);
+  $('v-note').textContent = F.note;
+  $('v-hz').textContent = F.pitchHz ? String(Math.round(F.pitchHz)) : '0';
+  $('v-tone').style.left = threader.toneFor(F, params) * 100 + '%';
 }
 
 const levelHist = new Float32Array(200);
@@ -873,6 +975,7 @@ function refreshEmpty() {
 // ───────── Frame loop ─────────
 
 let last = performance.now();
+let toneAge = 0;
 let fpsT = 0;
 let fpsN = 0;
 
@@ -899,14 +1002,29 @@ function frame(now: number) {
       else renderer.setFrame(source.video, source.width, source.height, true);
       configureOutput();
       onSourceChanged();
+      // Stills get a detailed tone map once; video/camera refresh it as frames change
+      if (source.kind === 'image' && source.still) threader.tone.build(source.still, source.width, source.height, 640);
+      toneAge = 1;
     } else if (source.dynamic) {
       if (source.syncSize() && params.format === 'source') configureOutput();
       if (source.takeNewFrame()) renderer.setFrame(source.video, source.width, source.height, true);
+    }
+    toneAge += dt;
+    if (source.dynamic && params.engine === 'map' && toneAge > 0.08 && source.video.readyState >= 2) {
+      threader.tone.build(source.video, source.width, source.height, 256);
+      toneAge = 0;
     }
   }
 
   const pm = passMode();
   scanner.update({ dt, params, audio, passMode: pm });
+  const map = params.engine === 'map';
+  if (map && hasSource()) {
+    threader.setSweepRes(renderer.sweepRes);
+    threader.fill(scanner.swept, audio.features, params, renderer.srcW, renderer.srcH);
+    renderer.uploadThread(threader.data, threader.dirtyLo, threader.dirtyHi);
+    threader.clearDirty();
+  }
 
   // Spectrum: fast for the live edge, smoothed (to head speed) for the record
   blurBands(audio.features.bands, specLive);
@@ -922,6 +1040,8 @@ function frame(now: number) {
     renderer.uploadSlit(scanner.slit);
     renderer.uploadSpectrum(specRecord, specLive);
     renderer.step({
+      engine: map ? 1 : 0,
+      bend: params.bend,
       axis: AXIS[params.axis],
       wrap: !pm,
       head: scanner.head,

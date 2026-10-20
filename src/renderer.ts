@@ -1,8 +1,11 @@
 import { VERT, ACCUM_FRAG, DISPLAY_FRAG } from './shaders';
+import { THREAD_ROWS } from './thread';
 
 type Target = { tex: WebGLTexture; fbo: WebGLFramebuffer };
 
 export interface StepUniforms {
+  engine: number;
+  bend: number;
   axis: number;
   wrap: boolean;
   head: number;
@@ -61,6 +64,7 @@ export class Renderer {
   histCount = 0;
 
   private slitTex: WebGLTexture;
+  private threadTex: WebGLTexture;
   private specTex: WebGLTexture;
   private specBytes = new Uint8Array(SPEC_BANDS * 3);
 
@@ -89,6 +93,7 @@ export class Renderer {
       'uPrev', 'uSource', 'uHistory', 'uSlit', 'uSpec', 'uRes', 'uAxis', 'uWrap', 'uHead',
       'uFrom', 'uTo', 'uWet', 'uLive', 'uSweepRes', 'uCrossPx', 'uSrcCrossPx', 'uCrossCrop',
       'uDisplace', 'uSlices', 'uSpecMean', 'uTimeWarp', 'uHistCount', 'uHistHead', 'uHistN', 'uFlipX',
+      'uThread', 'uEngine', 'uBend',
     ]) this.accumU[n] = gl.getUniformLocation(this.accumProg, n);
     for (const n of ['uAccum', 'uRes', 'uColour', 'uDuoA', 'uDuoB', 'uBg', 'uGridCol', 'uGrid'])
       this.displayU[n] = gl.getUniformLocation(this.displayProg, n);
@@ -109,6 +114,10 @@ export class Renderer {
 
     this.slitTex = gl.createTexture()!;
     gl.bindTexture(gl.TEXTURE_2D, this.slitTex);
+    this.texParams(gl.TEXTURE_2D, gl.NEAREST, gl.NEAREST, gl.CLAMP_TO_EDGE);
+
+    this.threadTex = gl.createTexture()!;
+    gl.bindTexture(gl.TEXTURE_2D, this.threadTex);
     this.texParams(gl.TEXTURE_2D, gl.NEAREST, gl.NEAREST, gl.CLAMP_TO_EDGE);
 
     this.specTex = gl.createTexture()!;
@@ -174,6 +183,20 @@ export class Renderer {
     const gl = this.gl;
     gl.bindTexture(gl.TEXTURE_2D, this.slitTex);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, n, 1, 0, gl.RGBA, gl.FLOAT, null);
+    gl.bindTexture(gl.TEXTURE_2D, this.threadTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, n, THREAD_ROWS, 0, gl.RGBA, gl.FLOAT, new Float32Array(n * THREAD_ROWS * 4));
+  }
+
+  /** Upload columns lo..hi of the map engine's thread data. */
+  uploadThread(data: Float32Array, lo: number, hi: number) {
+    if (hi < lo) return;
+    const gl = this.gl;
+    gl.bindTexture(gl.TEXTURE_2D, this.threadTex);
+    gl.pixelStorei(gl.UNPACK_ROW_LENGTH, this.sweepRes);
+    gl.pixelStorei(gl.UNPACK_SKIP_PIXELS, lo);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, lo, 0, hi - lo + 1, THREAD_ROWS, gl.RGBA, gl.FLOAT, data);
+    gl.pixelStorei(gl.UNPACK_ROW_LENGTH, 0);
+    gl.pixelStorei(gl.UNPACK_SKIP_PIXELS, 0);
   }
 
   private makeTarget(w: number, h: number): Target {
@@ -293,7 +316,7 @@ export class Renderer {
   /** Write freshly swept columns into the canvas, then draw the live wet edge. */
   step(u: StepUniforms) {
     this.pass(u, false);
-    this.liveValid = u.wet > 0;
+    this.liveValid = u.wet > 0 && u.engine === 0;
     if (this.liveValid) this.pass(u, true);
   }
 
@@ -316,6 +339,8 @@ export class Renderer {
     gl.bindTexture(gl.TEXTURE_2D, this.slitTex);
     gl.activeTexture(gl.TEXTURE4);
     gl.bindTexture(gl.TEXTURE_2D, this.specTex);
+    gl.activeTexture(gl.TEXTURE5);
+    gl.bindTexture(gl.TEXTURE_2D, this.threadTex);
 
     const U = this.accumU;
     gl.uniform1i(U.uPrev, 0);
@@ -323,6 +348,9 @@ export class Renderer {
     gl.uniform1i(U.uHistory, 2);
     gl.uniform1i(U.uSlit, 3);
     gl.uniform1i(U.uSpec, 4);
+    gl.uniform1i(U.uThread, 5);
+    gl.uniform1i(U.uEngine, u.engine);
+    gl.uniform1f(U.uBend, u.bend);
 
     const w = this.width;
     const h = this.height;

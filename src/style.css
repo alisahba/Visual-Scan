@@ -455,6 +455,38 @@ select {
   color: var(--on-accent);
 }
 
+/* Pitch readout: the note and where it lands on the image's tone scale */
+.pitch {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1.3fr;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+  color: var(--mid);
+}
+
+.pitch b {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.tone-scale {
+  position: relative;
+  height: 10px;
+  background: linear-gradient(to right, #000, #fff);
+  outline: 1px solid var(--rule);
+}
+
+.tone-scale i {
+  position: absolute;
+  top: -4px;
+  bottom: -4px;
+  left: 50%;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--accent);
+}
+
 /* Sliders */
 .sliders {
   display: grid;
@@ -467,6 +499,18 @@ select {
   align-items: center;
   gap: 12px;
   min-height: 28px;
+}
+
+.group {
+  font-size: 11px;
+  color: var(--mid);
+  padding: 10px 0 2px;
+  border-bottom: 1px solid var(--rule);
+  margin-bottom: 4px;
+}
+
+.group:first-child {
+  padding-top: 0;
 }
 
 .row output {

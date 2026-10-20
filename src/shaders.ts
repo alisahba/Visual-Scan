@@ -29,6 +29,9 @@ uniform sampler2D uSource;
 uniform sampler2DArray uHistory;
 uniform highp sampler2D uSlit;   // per-column: r = slit pos, g = cross scale, b = cross offset, a = grain
 uniform sampler2D uSpec;         // smoothed log spectrum, low -> high
+uniform highp sampler2D uThread; // map engine: row 0 = (a, b), row 1 = (m, length px, written)
+uniform int uEngine;             // 0 = scan, 1 = map
+uniform float uBend;             // map engine: 0 = straight a->b, 1 = curve through m
 
 uniform vec2 uRes;
 uniform int uAxis;               // 0 horizontal, 1 vertical, 2 radial
@@ -61,6 +64,7 @@ float hash(vec2 p) {
 }
 
 float mirror(float x) { return 1.0 - abs(1.0 - mod(x, 2.0)); }
+
 
 vec2 sweepCoords(vec2 uv) {
   if (uAxis == 0) return uv;
@@ -109,6 +113,26 @@ void main() {
   }
 
   int col = clamp(int(s * float(uSweepRes)), 0, uSweepRes - 1);
+
+  // Map engine: the column is the image along the line between two picks
+  // (a -> b), bent through the middle pick m. Top of the column = a.
+  if (uEngine == 1) {
+    vec4 ab = texelFetch(uThread, ivec2(col, 0), 0);
+    vec4 mm = texelFetch(uThread, ivec2(col, 1), 0);
+    if (mm.w < 0.5) { outColor = prev; return; }
+    float t = clamp(1.0 - c, 0.0, 1.0);
+    vec2 a = ab.xy;
+    vec2 b = ab.zw;
+    vec2 mid = 0.5 * (a + b);
+    vec2 ctrl = mix(mid, 2.0 * mm.xy - mid, uBend);   // quadratic that passes through m
+    vec2 tuv = mix(mix(a, ctrl, t), mix(ctrl, b, t), t);
+    tuv = vec2(mirror(tuv.x), mirror(tuv.y));
+    float tlod = max(0.0, log2(max(mm.z / uCrossPx, 1e-4)));
+    vec3 tc = textureLod(uSource, tuv, tlod).rgb;
+    outColor = mix(prev, vec4(tc, 1.0), w);
+    return;
+  }
+
   vec4 slit = texelFetch(uSlit, ivec2(col, 0), 0);
 
   // Slices quantise the cross axis into bands that move as blocks.
